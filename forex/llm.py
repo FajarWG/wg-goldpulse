@@ -17,24 +17,21 @@ from .config import LLMConfig
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
-You are an FX market analyst. You will be given pre-computed technical readings \
-for one or more currency pairs across multiple timeframes.
+Anda adalah analis pasar XAUUSD. Anda menerima hasil teknikal yang sudah dihitung \
+secara deterministik pada beberapa timeframe.
 
-Rules:
-- Interpret only the data provided. Never invent price levels, economic data, \
-news events, or numbers that are not in the input.
-- Reference the session context: FX liquidity and behaviour differ between the \
-Tokyo, London and New York windows.
-- Quote distances in pips, matching the input.
-- When timeframes conflict, say so plainly rather than forcing a directional call.
-- Be concise and specific. No filler, no disclaimers about being an AI.
-- This is technical commentary for educational purposes, not investment advice. \
-Do not tell the user to buy or sell; describe conditions, levels and risks.
+Aturan:
+- Gunakan hanya data yang diberikan. Jangan mengarang harga, berita, atau angka.
+- Jelaskan konteks sesi Tokyo, London, atau New York bila relevan.
+- Jika timeframe bertentangan, katakan dengan jelas dan jangan memaksakan arah.
+- Gunakan Bahasa Indonesia yang ringkas dan mudah dibaca di Telegram.
+- AI hanya menjelaskan hasil mesin; jangan mengubah signal, skor, SL, atau TP.
+- Jangan menyuruh pengguna membeli atau menjual. Jelaskan kondisi dan risiko.
 
-Structure your answer as:
-1. Market context (one short paragraph)
-2. Per-pair reading (one short paragraph each, naming the key levels)
-3. What would invalidate each read
+Struktur jawaban:
+1. Kondisi pasar (maksimal dua kalimat)
+2. Keselarasan timeframe dan level penting
+3. Hal yang membatalkan analisis
 """
 
 
@@ -82,7 +79,11 @@ def build_user_prompt(payload: Dict[str, Any]) -> str:
     )
 
 
-def generate_commentary(payload: Dict[str, Any], config: LLMConfig) -> Optional[str]:
+def generate_commentary(
+    payload: Dict[str, Any],
+    config: LLMConfig,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Return LLM commentary, or ``None`` when disabled or failing.
 
     Failure is non-fatal by design: losing optional prose must not discard a
@@ -96,12 +97,26 @@ def generate_commentary(payload: Dict[str, Any], config: LLMConfig) -> Optional[
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_user_prompt(payload)},
     ]
-
-    try:
-        text = _post_chat_completion(config, messages)
-    except LLMError as exc:
-        logger.warning("LLM commentary unavailable: %s", exc)
-        return None
-
-    text = text.strip()
-    return text or None
+    candidates = LLMConfig.candidates_from_env() or [config]
+    attempted = []
+    for candidate in candidates:
+        attempted.append(candidate.provider)
+        try:
+            text = _post_chat_completion(candidate, messages).strip()
+        except LLMError as exc:
+            logger.warning("%s commentary unavailable: %s", candidate.provider, exc)
+            continue
+        if text:
+            if metadata is not None:
+                metadata.update(
+                    {
+                        "enabled": True,
+                        "provider": candidate.provider,
+                        "model": candidate.model,
+                        "attempted": attempted,
+                    }
+                )
+            return text
+    if metadata is not None:
+        metadata.update({"enabled": False, "provider": None, "attempted": attempted})
+    return None

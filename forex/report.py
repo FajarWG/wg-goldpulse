@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -103,6 +104,18 @@ def render_markdown(payload: Dict[str, Any]) -> str:
     if provider_status:
         active = [name for name, state in provider_status.items() if state == "available"]
         lines.append(f"Data providers available: {', '.join(active) if active else 'none'}")
+        lines.append("")
+
+    usage = payload.get("twelvedata_usage") or {}
+    if usage:
+        official = usage.get("official_daily_usage")
+        official_limit = usage.get("official_daily_limit") or usage.get("daily_limit", 800)
+        account_text = f"account {official}/{official_limit}; " if official is not None else ""
+        lines.append(
+            "Twelve Data usage (UTC): "
+            f"{account_text}this bot {usage.get('estimated_credits', 0)} credits "
+            f"({usage.get('requests', 0)} requests, {usage.get('failures', 0)} failed)"
+        )
         lines.append("")
 
     commentary = payload.get("commentary")
@@ -294,10 +307,11 @@ def render(payload: Dict[str, Any], fmt: str = "markdown") -> str:
 
 def telegram_summary(payload: Dict[str, Any], limit: int = 3800) -> str:
     """Compact plain-text summary sized for a Telegram message."""
+    from .product import bot_name
+
     lines = [
-        "Daily Forex Analysis",
-        payload.get("session_summary", ""),
-        "",
+        f"🥇 {bot_name().upper()} — MARKET UPDATE",
+        "━━━━━━━━━━━━━━━━",
     ]
 
     for pair in payload.get("pairs", []):
@@ -306,18 +320,38 @@ def telegram_summary(payload: Dict[str, Any], limit: int = 3800) -> str:
             continue
 
         alignment = pair.get("alignment", {})
-        daily = pair.get("timeframes", {}).get("D1") or {}
-        atr_pips = (daily.get("volatility") or {}).get("atr_pips")
-        lines.append(
-            f"{pair['pretty']}: {alignment.get('verdict', 'n/a')} "
-            f"({alignment.get('confidence', 'n/a')}) @ "
-            f"{pair.get('last_price_display', 'n/a')}"
-            + (f", D1 ATR {atr_pips:.0f} pips" if atr_pips is not None else "")
+        timeframes = pair.get("timeframes", {})
+        labels = {"up": "NAIK", "down": "TURUN", "sideways": "SIDEWAYS", "conflicted": "KONFLIK"}
+        verdict = alignment.get("verdict", "n/a")
+        lines.extend(
+            [
+                f"{pair['pretty']} · {pair.get('last_price_display', 'n/a')}",
+                f"Arah pasar: {labels.get(verdict, verdict.upper())}",
+                f"Kekuatan: {str(alignment.get('confidence', 'n/a')).upper()}",
+                "",
+                "Timeframe:",
+            ]
         )
+        for timeframe in ("H1", "H4", "D1"):
+            read = timeframes.get(timeframe) or {}
+            trend = (read.get("trend") or {}).get("direction", "n/a")
+            rsi = (read.get("momentum") or {}).get("rsi")
+            rsi_text = "—" if rsi is None else f"{rsi:.1f}"
+            lines.append(f"• {timeframe}: {labels.get(trend, trend.upper())} · RSI {rsi_text}")
+
+    usage = payload.get("twelvedata_usage") or {}
+    if usage:
+        official = usage.get("official_daily_usage")
+        official_limit = usage.get("official_daily_limit") or usage.get("daily_limit", 800)
+        account_text = f"account {official}/{official_limit}; " if official is not None else ""
+        lines.extend(["", f"Data API: {account_text}bot {usage.get('estimated_credits', 0)} kredit"])
 
     commentary = payload.get("commentary")
     if commentary:
-        lines.extend(["", commentary])
+        provider = (payload.get("ai") or {}).get("provider", "AI")
+        lines.extend(["", f"🤖 Ringkasan {str(provider).title()}:", commentary])
+
+    lines.extend(["", "Gunakan tombol di bawah untuk statistik dan backtest."])
 
     text = "\n".join(lines).strip()
     if len(text) > limit:

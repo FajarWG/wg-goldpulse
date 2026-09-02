@@ -19,6 +19,7 @@ from forex.providers import (
     TwelveDataProvider,
     YFinanceProvider,
     _normalise,
+    _safe_http_error,
     build_providers,
     resample,
 )
@@ -112,6 +113,8 @@ class TestProviderAvailability:
     def test_keyed_providers_unavailable_without_key(self, monkeypatch):
         monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
         monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
+        monkeypatch.delenv("TWELVEDATA_API_KEY2", raising=False)
+        monkeypatch.delenv("TWELVEDATA_API_KEY_2", raising=False)
         assert AlphaVantageProvider().is_available() is False
         assert TwelveDataProvider().is_available() is False
 
@@ -121,9 +124,25 @@ class TestProviderAvailability:
         assert AlphaVantageProvider().is_available() is True
         assert TwelveDataProvider().is_available() is True
 
+    def test_second_twelve_data_key_is_recognised(self, monkeypatch):
+        monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
+        monkeypatch.setenv("TWELVEDATA_API_KEY2", "backup")
+        provider = TwelveDataProvider()
+        assert provider.is_available() is True
+        assert provider.api_keys == ["backup"]
+
     def test_unavailable_reason_is_actionable(self, monkeypatch):
         monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
         assert "ALPHAVANTAGE_API_KEY" in AlphaVantageProvider().unavailable_reason()
+
+    def test_http_error_description_never_contains_url_or_key(self):
+        class Response:
+            status_code = 429
+
+        error = RuntimeError("https://example.test?apikey=do-not-leak")
+        text = _safe_http_error(error, Response())
+        assert text == "RuntimeError (HTTP 429)"
+        assert "apikey" not in text
 
     def test_build_providers_honours_preference(self):
         assert build_providers(preferred="yfinance")[0].name == "yfinance"

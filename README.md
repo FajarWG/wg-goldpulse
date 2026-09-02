@@ -1,408 +1,150 @@
-<div align="center">
+# WG GoldPulse
 
-<img src="assets/logo.svg" alt="daily_forex_analysis" width="128" height="128">
+WG GoldPulse adalah bot analisis XAU/USD untuk Ubuntu/VPS. Sistem mengambil data pasar, menghitung analisis multi-timeframe dan signal deterministik, mencatat hasil signal, menjalankan historical backtest, menambahkan penjelasan AI opsional, lalu mengirim laporan ke Telegram.
 
-# daily_forex_analysis
+> **Analysis only.** Proyek ini tidak terhubung ke akun broker dan tidak membuka atau menutup transaksi. Hasil backtest bukan jaminan performa berikutnya.
 
-**LLM-assisted technical analysis for spot FX and metals.**
+## Status strategi
 
-Multi-timeframe indicators measured in pips · 24/5 session awareness · pluggable data providers · bring your own API keys
-
-[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](#tests)
-[![Offline tests](https://img.shields.io/badge/network%20calls%20in%20tests-0-blue.svg)](#tests)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-orange.svg)](#contributing)
-
-**English** ·
-[简体中文](README.zh-CN.md) ·
-[繁體中文](README.zh-TW.md) ·
-[日本語](README.ja.md) ·
-[한국어](README.ko.md) ·
-[Bahasa Indonesia](README.id.md) ·
-[Español](README.es.md) ·
-[Português](README.pt-BR.md) ·
-[Français](README.fr.md) ·
-[Deutsch](README.de.md) ·
-[Русский](README.ru.md)
-
-</div>
-
----
-
-## Overview
-
-`daily_forex_analysis` fetches candles from whichever market data provider you have
-access to, computes a multi-timeframe technical picture, optionally asks a language
-model to interpret it, and writes a report you can read in your terminal, commit to
-disk, push to Telegram, or open in a desktop GUI.
-
-It runs with **zero configuration and no API keys** using Yahoo Finance. Every other
-capability — premium data, LLM commentary, notifications — activates only when you
-supply your own credentials.
-
-<div align="center">
-  <img src="assets/demo.gif" alt="daily_forex_analysis running in a terminal" width="900">
-</div>
-
-```console
-$ python main.py --symbols EURUSD,USDJPY --dry-run
-
-### EUR/USD  ▲
-
-Last price 1.15540 (source: yfinance)
-
-Multi-timeframe read: **up** (confidence: medium) — timeframes agree on an uptrend
-
-| Timeframe | Trend | RSI | ATR (pips) | Range position | Range width |
-| --- | --- | --- | --- | --- | --- |
-| H1 | ▲ up | 53.0 | 6.9 | 53% | 60 |
-| D1 | → sideways | 60.4 | 56.0 | 89% | 225 |
-
-- **H1**: fast EMA above slow EMA by 7.4 pips. RSI 53.0 mid-range; MACD histogram
-  negative. ATR 6.9 pips (percentile 17 of recent history); compressed ranges often
-  precede breakouts. High 1.158212, low 1.152206.
-
-Most active during: London, New York
-```
-
----
-
-## What's new in 0.2.0
-
-- **Desktop GUI** — native PySide6 application with dark theme, sortable results table, interactive candlestick charts (EMA 20/50 overlays), and one-click export to Markdown/JSON/CSV/HTML. Run `forex-desktop` or `python -m desktop.app`.
-- **CSV export** — flat, spreadsheet-ready output (`--format csv`).
-- **HTML export** — self-contained, styled report you can share or archive (`--format html`).
-- **`--list-symbols`** — print every supported currency and metal, then exit.
-- **`--version`** — print the installed version.
-
----
-
-## Why this is not a stock analyser with the labels changed
-
-FX carries conventions that have no equity equivalent. Getting them wrong makes every
-number on the page meaningless.
-
-| | Equities | Spot FX | How this project handles it |
-| --- | --- | --- | --- |
-| **Unit of movement** | 1 cent is 1 cent | a pip is 0.0001 on EUR/USD but 0.01 on USD/JPY | `instruments.py` owns each pair's pip size; nothing hardcodes `0.0001` |
-| **Trading hours** | exchange open and close | continuous, Sunday 21:00 → Friday 21:00 UTC | `sessions.py` reports the live session and flags the London–New York overlap |
-| **Valuation** | P/E, earnings, book value | a currency has no earnings | no fundamentals are invented |
-| **Instrument identity** | opaque ticker (`AAPL`) | a *pair* of currencies | symbols parse into base and quote with their own conventions |
-
-A 0.0010 move is **10 pips** on EUR/USD and **0.1 pips** on USD/JPY. Every distance in
-this codebase is derived from the instrument's own convention.
-
----
-
-## Installation
-
-```bash
-git clone https://github.com/0xgetz/daily_forex_analysis.git
-cd daily_forex_analysis
-
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-pip install -e ".[dev]"
-```
-
-Requires Python 3.9 or newer.
-
-### Desktop (optional)
-
-```bash
-pip install -e ".[desktop]"
-forex-desktop
-```
-
-The desktop app provides a native dark-themed GUI with three views:
-
-- **Table** — sortable grid of every symbol × timeframe reading
-- **Chart** — interactive candlestick chart with EMA 20/50 overlays, RSI(14) and MACD(12/26/9) sub-charts; click any symbol in the watchlist to load its D1 chart. Save any chart as PNG from the toolbar.
-- **Report** — full Markdown report in a monospace viewer
-
-Export any result to Markdown, JSON, CSV, or HTML from the toolbar. Enable **Auto-refresh** to re-run the analysis every 5 minutes hands-free.
-
-> On Linux you may need system OpenGL libraries:
-> `sudo apt install libegl1 libgl1 libxkbcommon0 libdbus-1-3`
-
----
-
-## Quick start
-
-```bash
-# Show configuration and which providers are usable — no network required
-python main.py --check
-
-# Analyse the default watchlist, print to stdout, write nothing
-python main.py --dry-run
-
-# Your pairs, your timeframes, written to reports/
-python main.py --symbols EURUSD,GBPUSD,XAUUSD --timeframes H1,H4,D1
-
-# Machine-readable output
-python main.py --symbols EURUSD --format json
-
-# Spreadsheet-ready output
-python main.py --symbols EURUSD --format csv
-
-# Self-contained styled report
-python main.py --symbols EURUSD --format html
-
-# Launch the desktop app
-forex-desktop
-```
-
-### CLI reference
-
-| Flag | Description |
-| --- | --- |
-| `--symbols` | Comma-separated pairs, e.g. `EURUSD,GBPUSD,XAUUSD` |
-| `--timeframes` | Subset of `H1,H4,D1` |
-| `--bars` | Candles requested per timeframe (default `300`) |
-| `--provider` | Force `twelvedata`, `alphavantage`, or `yfinance` |
-| `--format` | `markdown` (default), `json`, `csv`, or `html` |
-| `--output-dir` | Destination directory for reports |
-| `--dry-run` | Analyse and print only: no LLM call, no file, no notification |
-| `--no-push` | Skip notifications |
-| `--stdout` | Print the report as well as writing it |
-| `--check` | Print configuration and provider status, then exit |
-| `--list-symbols` | Print every supported symbol, then exit |
-| `--version` | Print the version, then exit |
-| `--log-level` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-
----
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in only what you need. Every value can also be
-supplied as an environment variable.
-
-### Data providers
-
-Providers are tried in order until one satisfies **every** requested timeframe, so a
-single report never mixes sources with different conventions. A provider without
-credentials is skipped silently.
-
-| Provider | Credential | Notes |
+| Versi | Status | Hasil utama |
 | --- | --- | --- |
-| Twelve Data | `TWELVEDATA_API_KEY` | Native 4-hour candles; free tier available |
-| Alpha Vantage | `ALPHAVANTAGE_API_KEY` | FX only, no metals; rate-limited free tier |
-| Yahoo Finance | *none* | Default fallback, no key required |
+| V1 | Tidak direkomendasikan | 90 hari: −19R, WR 27,8% |
+| V2 | Kandidat/shadow | Locked holdout: +1R, PF 1,05 |
+| V3/V3.1 | Riset gagal | Tidak mencapai promotion gate |
+| V4 | Riset gagal | Development 75,3% WR, tetapi locked holdout hanya 54,4% dan −10,8R setelah cost |
 
-Force one with `--provider twelvedata` or `FOREX_PROVIDER`.
+Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus diperlakukan sebagai eksperimen manual, bukan instruksi trading.
 
-> [!NOTE]
-> Two Yahoo Finance caveats worth knowing up front:
-> - Yahoo has no 4-hour candle, so `H4` is **resampled** from hourly data.
-> - Yahoo has no spot metal quote, so `XAUUSD` is served from **COMEX futures**
->   (`GC=F`). Futures carry basis and roll effects, so the level differs slightly from
->   your broker's spot price. Fine for reading structure, not for execution.
+## Fitur
 
-### LLM commentary (optional)
+- Analisis H1/H4/D1 dengan EMA, RSI, MACD, ATR, Bollinger, Donchian, volatility regime, support, dan resistance.
+- Konfirmasi M5/M15 berbasis market structure, BOS, liquidity sweep, FVG, candle pattern, dan confluence score.
+- Signal LONG/SHORT/WAIT dengan entry, batas salah/SL, dan target referensi.
+- Telegram commands dan inline buttons untuk statistik, backtest, bantuan, Ambil, dan Lewati.
+- Forward validation otomatis: menang, kalah, expired, win rate, dan akumulasi R.
+- Historical replay V1–V4 dengan cache data UTC, versioned output, drawdown, dan profit factor.
+- Dual Twelve Data API key, quota accounting, failover, throttling, dan retry.
+- AI explanation opsional dengan fallback Groq → Gemini → DeepSeek.
+- systemd services/timers untuk market analysis, signal checks, Telegram listener, dan weekly backtest.
 
-Any OpenAI-compatible `/chat/completions` endpoint works.
-
-```bash
-LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o-mini
-LLM_BASE_URL=https://api.openai.com/v1
-```
-
-Point `LLM_BASE_URL` at OpenRouter, DeepSeek, Groq, Together, or a local
-llama.cpp / vLLM server and nothing else changes. `OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` and `GROQ_API_KEY` are all accepted, so you
-need not rename a key you already have.
-
-> [!IMPORTANT]
-> The model never sees raw candles and never produces numbers. It receives the
-> already-computed readings and is asked to interpret them, which keeps every price and
-> level deterministic and auditable. Without a key the report is still produced from
-> computed analysis alone.
-
-### Telegram push (optional)
+## Quick start lokal
 
 ```bash
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF
-TELEGRAM_CHAT_ID=987654321
+git clone https://github.com/FajarWG/wg-goldpulse.git
+cd wg-goldpulse
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env
 ```
 
-Create a bot with [@BotFather](https://t.me/BotFather) and get your chat id from
-[@userinfobot](https://t.me/userinfobot). Skip delivery with `--no-push`. A failed push
-never discards a report that was already written.
-
-### All settings
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `FOREX_SYMBOLS` | majors + `XAUUSD` | Comma-separated pairs |
-| `FOREX_TIMEFRAMES` | `H1,H4,D1` | Subset of H1, H4, D1 |
-| `FOREX_BARS` | `300` | Candles requested per timeframe |
-| `FOREX_PROVIDER` | *auto* | Preferred provider name |
-| `FOREX_OUTPUT_DIR` | `reports` | Where reports are written |
-| `FOREX_REPORT_FORMAT` | `markdown` | `markdown`, `json`, `csv`, or `html` |
-| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-
----
-
-## Symbols
-
-All of these spellings resolve to the same instrument:
-
-```
-EURUSD    eur/usd    EUR-USD    EUR_USD    EURUSD=X
-```
-
-Supported: the major and minor currency crosses, plus `XAUUSD` (gold), `XAGUSD`
-(silver), `XPTUSD` (platinum) and `XPDUSD` (palladium).
-
-See everything that is recognised with `python main.py --list-symbols`.
-
----
-
-## What gets computed
-
-**Per timeframe**
-
-- EMA(20/50) trend, with an ATR-scaled noise floor so compressed averages are reported
-  as *sideways* rather than as a false trend
-- Wilder RSI(14)
-- MACD(12/26/9)
-- ATR(14) plus a volatility-regime percentile (contracting / normal / expanding)
-- Bollinger and Donchian channels
-- Position within the recent range, and range width in pips
-
-**Across timeframes**
-
-An explicit confluence verdict — `up`, `down`, `sideways` or `conflicted` — with a
-confidence level. Multi-timeframe agreement is the most useful structural signal in
-discretionary FX analysis, so it is computed and stated plainly instead of being left
-for the model to infer.
-
-Every distance is expressed in pips using the instrument's own convention.
-
----
-
-## Scheduling
-
-**Cron** — every weekday at 07:00 UTC, after the London open:
-
-```cron
-0 7 * * 1-5 cd /path/to/daily_forex_analysis && .venv/bin/python main.py
-```
-
-**GitHub Actions** — a workflow is included at `.github/workflows/daily.yml`
-(`workflow_dispatch` plus a daily schedule). Add your keys as repository secrets to
-enable the LLM and Telegram steps; missing secrets simply disable those features.
-
----
-
-## Architecture
-
-```
-forex/
-├── instruments.py   symbol parsing, pip conventions
-├── sessions.py      24/5 market hours, Tokyo/London/New York sessions
-├── providers.py     data sources with ordered fallback
-├── analysis.py      indicators and structure (pure functions)
-├── llm.py           optional commentary over computed readings
-├── report.py        Markdown, JSON, CSV and HTML rendering
-├── notify.py        optional Telegram push
-├── config.py        environment / .env configuration
-└── pipeline.py      fetch → analyse → interpret → render → notify
-desktop/
-├── app.py           PySide6 desktop application
-└── chart.py         candlestick chart widget (price + RSI + MACD)
-main.py              CLI
-```
-
-`analysis.py` is pure: a DataFrame goes in, numbers come out. No network, no
-configuration, no LLM. That is why the indicator tests run entirely offline against
-synthetic series.
-
-**Failure isolation is a design goal.** One broken pair is recorded in the report's
-Failures section rather than aborting the run. A failed LLM call or Telegram push never
-discards a report that was already computed.
-
-### Adding a data provider
-
-Subclass `CandleProvider`, implement two methods, and append it to `build_providers()`.
-Nothing else in the codebase needs to change.
-
-```python
-from forex.providers import CandleProvider
-
-class MyProvider(CandleProvider):
-    name = "myprovider"
-
-    def is_available(self) -> bool:
-        return bool(os.getenv("MY_API_KEY"))
-
-    def fetch(self, instrument, timeframe, bars):
-        ...  # return a DataFrame with open/high/low/close
-```
-
----
-
-## Tests
+Isi `.env` secara lokal. Jangan commit API key atau token.
 
 ```bash
-python -m pytest          # 221 tests
+python main.py --symbols XAUUSD --timeframes H1,H4,D1 --stdout
+python signal_main.py
+python backtest_main.py --strategy all
+python telegram_bot_main.py
 ```
 
-No test touches the network. Providers are stubbed, candles are synthetic and seeded,
-and indicators are verified against hand-computable cases — a monotonic rise must give
-RSI 100, a gap-up candle's true range must use the previous close, the same ATR must
-read 100× smaller in pips on a JPY cross.
+## Konfigurasi minimum
 
-`tests/test_demo_assets.py` covers the demo-GIF text pipeline in `assets/make_demo.py`:
-markdown consumption, table column alignment, and frame-width wrapping. The image
-drawing itself is not asserted — comparing rasters is brittle — but every transform
-that produced a visible defect is pinned.
+```dotenv
+TWELVEDATA_API_KEY=
+TWELVEDATA_API_KEY2=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
 
-`tests/test_desktop_chart.py` runs the chart widget offscreen against synthetic OHLC
-series: candles, EMA overlays, and the RSI/MACD sub-charts must all materialise, and
-short series must degrade gracefully instead of raising.
+AI bersifat opsional:
 
-> [!NOTE]
-> The bundled CI workflow cannot run until GitHub Actions is enabled on the repository;
-> on a locked or unbilled account every run fails before starting. The counts above come
-> from local runs on Python 3.14 and from a clean editable install in a separate
-> virtual environment.
+```dotenv
+GROQ_API_KEY=
+GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
+AI_PROVIDER_ORDER=groq,gemini,deepseek
+```
 
----
+Gunakan `.env.example` sebagai referensi lengkap. File runtime VPS disimpan di `/etc/xauusd-analysis.env` dengan permission `0600`, bukan di Git.
 
-## Exit codes
+## Instalasi Ubuntu VPS
 
-| Code | Meaning |
-| --- | --- |
-| `0` | At least one pair was analysed |
-| `1` | Every pair failed |
-| `2` | Invalid symbol argument |
+```bash
+sudo mkdir -p /opt/xauusd-analysis /var/lib/xauusd-analysis
+sudo chown ubuntu:ubuntu /opt/xauusd-analysis /var/lib/xauusd-analysis
 
----
+git clone https://github.com/FajarWG/wg-goldpulse.git /opt/xauusd-analysis
+cd /opt/xauusd-analysis
+python3 -m venv .venv
+.venv/bin/pip install -e .
 
-## Contributing
+sudo install -o root -g root -m 0600 \
+  deploy/xauusd-analysis.env.example /etc/xauusd-analysis.env
+sudoedit /etc/xauusd-analysis.env
 
-Issues and pull requests are welcome. Useful contributions include new data providers,
-additional indicators, notification channels, and README translations.
+sudo install -m 0644 deploy/*.service deploy/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now \
+  xauusd-analysis.timer \
+  xauusd-signal.timer \
+  xauusd-backtest.timer \
+  xauusd-telegram.service
+```
 
-Please keep `analysis.py` pure and free of network calls, and add tests that run
-offline.
+Status dan log:
 
----
+```bash
+systemctl status xauusd-analysis.timer xauusd-signal.timer xauusd-backtest.timer
+systemctl status xauusd-telegram.service
+journalctl -u xauusd-signal.service -n 50 --no-pager
+journalctl -u xauusd-telegram.service -n 50 --no-pager
+```
 
-## Disclaimer
+## Update VPS dari GitHub
 
-This project produces technical readings from public market data for **educational
-purposes**. It does not tell you what to buy or sell, and it is not a substitute for
-your own analysis or for a licensed financial adviser. Free data sources can be delayed
-or wrong — verify prices with your broker before acting on anything here. Trading
-foreign exchange carries substantial risk of loss.
+```bash
+cd /opt/xauusd-analysis
+git pull --ff-only
+.venv/bin/pip install -e .
+sudo systemctl restart xauusd-telegram.service
+sudo systemctl daemon-reload
+```
 
----
+Periksa diff dan release notes sebelum menjalankan update pada VPS produksi.
 
-## License
+## Testing
 
-[MIT](LICENSE)
+```bash
+python -m pytest -q
+git diff --check
+```
+
+Test tidak memerlukan kredensial live dan tidak melakukan request jaringan.
+
+## Struktur repository
+
+```text
+forex/                    indicator, provider, SMC, tracking, backtest, AI
+tests/                    unit tests tanpa network
+deploy/                   template systemd dan environment VPS
+docs/GUIDE.md             flow dan panduan operasional lengkap
+docs/STRATEGY-RESEARCH.md hasil validasi V3/V4
+main.py                   macro analysis H1/H4/D1
+signal_main.py            evaluasi M5/M15
+telegram_bot_main.py      Telegram listener dan commands
+backtest_main.py          historical replay
+usage_main.py             laporan pemakaian Twelve Data
+```
+
+## Keamanan
+
+- `.env`, private key, database SQLite, market cache, dan reports tidak boleh di-commit.
+- Jangan menaruh credential pada command line, issue, log, atau Telegram chat.
+- Bila token pernah terekspos, rotasi melalui provider terkait.
+- HTTP error Twelve Data disanitasi agar URL berisi API key tidak masuk ke log aplikasi.
+
+## Asal proyek
+
+WG GoldPulse dikembangkan dari [0xgetz/daily_forex_analysis](https://github.com/0xgetz/daily_forex_analysis). Modul analisis umum, lisensi MIT, dan atribusi upstream tetap dipertahankan.
+
+Dokumentasi lebih rinci tersedia di [docs/GUIDE.md](docs/GUIDE.md) dan [docs/STRATEGY-RESEARCH.md](docs/STRATEGY-RESEARCH.md).

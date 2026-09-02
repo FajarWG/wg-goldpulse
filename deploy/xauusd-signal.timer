@@ -1,0 +1,13 @@
+[Unit]
+Description=Evaluate XAUUSD five-minute confirmation signals during the gold trading week
+
+[Timer]
+OnCalendar=Mon *-*-* 06..23:02,07,12,17,22,27,32,37,42,47,52,57:00 Asia/Tokyo
+OnCalendar=Tue..Fri *-*-* *:02,07,12,17,22,27,32,37,42,47,52,57:00 Asia/Tokyo
+OnCalendar=Sat *-*-* 00..05:02,07,12,17,22,27,32,37,42,47,52,57:00 Asia/Tokyo
+Persistent=true
+AccuracySec=30s
+Unit=xauusd-signal.service
+
+[Install]
+WantedBy=timers.target

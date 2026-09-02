@@ -22,8 +22,10 @@ from tests.helpers import StubProvider
 FX_ENV_VARS = (
     "FOREX_SYMBOLS", "FOREX_TIMEFRAMES", "FOREX_BARS", "FOREX_PROVIDER",
     "FOREX_OUTPUT_DIR", "FOREX_REPORT_FORMAT", "LLM_API_KEY", "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "LLM_MODEL",
+    "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "LLM_MODEL",
     "LLM_BASE_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "LOG_LEVEL",
+    "SIGNAL_TRACKING_DB", "SIGNAL_STRATEGY_VERSION", "SIGNAL_TIMEOUT_MINUTES",
+    "AI_PROVIDER_ORDER", "GROQ_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL",
 )
 
 
@@ -67,7 +69,7 @@ class TestConfig:
         assert Config.from_env(dotenv_path=None).bars == 300
 
     @pytest.mark.parametrize(
-        "var", ["LLM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY"]
+        "var", ["LLM_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY"]
     )
     def test_any_vendor_key_enables_llm(self, clean_env, var):
         """Users should not have to rename their existing key."""
@@ -91,6 +93,14 @@ class TestConfig:
         text = Config.from_env(dotenv_path=None).describe()
         assert "sk-super-secret-value" not in text
         assert "bot-secret" not in text
+
+    def test_ai_candidates_use_free_first_then_paid(self, clean_env):
+        clean_env.setenv("GROQ_API_KEY", "g")
+        clean_env.setenv("GEMINI_API_KEY", "m")
+        clean_env.setenv("DEEPSEEK_API_KEY", "d")
+        candidates = LLMConfig.candidates_from_env()
+        assert [item.provider for item in candidates] == ["groq", "gemini", "deepseek"]
+        assert candidates[0].base_url == "https://api.groq.com/openai/v1"
 
     def test_dotenv_does_not_override_real_env(self, clean_env, tmp_path, monkeypatch):
         env_file = tmp_path / ".env"
@@ -293,6 +303,39 @@ class TestNotifyGuards:
         monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
         assert notify_module.send_telegram("hi", TelegramConfig(bot_token="t", chat_id="1")) is False
 
+    def test_network_error_log_does_not_leak_bot_token(self, monkeypatch, caplog):
+        import forex.notify as notify_module
+
+        secret = "123456:do-not-log-this-token"
+
+        class FakeRequests:
+            @staticmethod
+            def post(*args, **kwargs):
+                raise ConnectionError(f"failed URL https://api.telegram.org/bot{secret}/sendMessage")
+
+        monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
+        assert notify_module.send_telegram("hi", TelegramConfig(bot_token=secret, chat_id="1")) is False
+        assert secret not in caplog.text
+
+    def test_tracking_adds_statistics_button(self, monkeypatch, tmp_path):
+        import forex.notify as notify_module
+
+        captured = {}
+
+        class Response:
+            status_code = 200
+
+        class FakeRequests:
+            @staticmethod
+            def post(url, json, timeout):
+                captured.update(json)
+                return Response()
+
+        monkeypatch.setenv("SIGNAL_TRACKING_DB", str(tmp_path / "signals.db"))
+        monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
+        assert notify_module.send_telegram("hi", TelegramConfig(bot_token="t", chat_id="1"))
+        assert captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "stats"
+
 
 class TestLLMGuards:
     def test_returns_none_without_key(self):
@@ -326,3 +369,25 @@ class TestLLMGuards:
 
         monkeypatch.setattr(llm_module, "_post_chat_completion", lambda *a, **k: "   ")
         assert llm_module.generate_commentary({"pairs": []}, LLMConfig(api_key="sk-x")) is None
+
+    def test_provider_failure_falls_back(self, clean_env, monkeypatch):
+        import forex.llm as llm_module
+
+        clean_env.setenv("GROQ_API_KEY", "g")
+        clean_env.setenv("GEMINI_API_KEY", "m")
+        attempts = []
+
+        def fake_call(config, messages):
+            attempts.append(config.provider)
+            if config.provider == "groq":
+                raise llm_module.LLMError("temporary")
+            return "Ringkasan Gemini"
+
+        monkeypatch.setattr(llm_module, "_post_chat_completion", fake_call)
+        metadata = {}
+        result = llm_module.generate_commentary(
+            {"pairs": []}, LLMConfig.from_env(), metadata=metadata
+        )
+        assert result == "Ringkasan Gemini"
+        assert attempts == ["groq", "gemini"]
+        assert metadata["provider"] == "gemini"

@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec /opt/xauusd-analysis/.venv/bin/python /opt/xauusd-analysis/usage_main.py "$@"

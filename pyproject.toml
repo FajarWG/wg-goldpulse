@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "daily-forex-analysis"
-version = "0.2.0"
-description = "LLM-assisted technical analysis for spot FX and metals, with pluggable data providers"
+name = "wg-goldpulse"
+version = "0.3.0"
+description = "Analysis-only XAUUSD signal research, validation, Telegram reporting, and backtesting"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -27,11 +27,16 @@ desktop = [
 
 [project.scripts]
 daily-forex-analysis = "main:main"
+wg-goldpulse = "main:main"
+wg-goldpulse-signal = "signal_main:main"
+wg-goldpulse-backtest = "backtest_main:main"
+wg-goldpulse-telegram = "telegram_bot_main:main"
+wg-goldpulse-usage = "usage_main:main"
 forex-desktop = "desktop.app:main"
 
 [tool.setuptools]
 packages = ["forex", "desktop"]
-py-modules = ["main"]
+py-modules = ["main", "signal_main", "backtest_main", "telegram_bot_main", "usage_main"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

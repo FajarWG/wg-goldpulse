@@ -6,6 +6,7 @@ individually and its error recorded in the payload.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -105,7 +106,23 @@ def build_payload(config: Config, manager: Optional[ProviderManager] = None) -> 
         "succeeded": succeeded,
         "failed": len(instruments) - succeeded,
     }
+    usage = manager.usage_summary()
+    if usage:
+        payload["twelvedata_usage"] = usage
     return payload
+
+
+def write_state(payload: Dict[str, Any]) -> Optional[str]:
+    """Atomically persist the latest machine-readable macro analysis."""
+    path = os.getenv("FOREX_STATE_PATH", "").strip()
+    if not path:
+        return None
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    os.replace(temporary, path)
+    return os.path.abspath(path)
 
 
 def write_report(text: str, config: Config, fmt: Optional[str] = None) -> str:
@@ -143,7 +160,10 @@ def run(
     payload = build_payload(config, manager=manager)
 
     if not dry_run:
-        payload["commentary"] = generate_commentary(payload, config.llm)
+        ai_metadata: Dict[str, Any] = {}
+        payload["commentary"] = generate_commentary(payload, config.llm, metadata=ai_metadata)
+        payload["ai"] = ai_metadata
+        write_state(payload)
     else:
         payload["commentary"] = None
 

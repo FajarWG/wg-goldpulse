@@ -1,0 +1,13 @@
+[Unit]
+Description=Run XAUUSD analysis five minutes after every hour on weekdays
+
+[Timer]
+OnCalendar=Mon *-*-* 06..23:00:00 Asia/Tokyo
+OnCalendar=Tue..Fri *-*-* *:00:00 Asia/Tokyo
+OnCalendar=Sat *-*-* 00..05:00:00 Asia/Tokyo
+Persistent=true
+AccuracySec=1min
+Unit=xauusd-analysis.service
+
+[Install]
+WantedBy=timers.target

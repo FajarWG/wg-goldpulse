@@ -1,0 +1,23 @@
+[Unit]
+Description=XAUUSD Telegram button listener
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/xauusd-analysis
+EnvironmentFile=/etc/xauusd-analysis.env
+ExecStart=/opt/xauusd-analysis/.venv/bin/python /opt/xauusd-analysis/telegram_bot_main.py
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xauusd-analysis
+
+[Install]
+WantedBy=multi-user.target

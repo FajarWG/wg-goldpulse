@@ -88,6 +88,7 @@ class LLMConfig:
     temperature: float = 0.3
     max_tokens: int = 1600
     timeout: int = 90
+    provider: str = "custom"
 
     @property
     def enabled(self) -> bool:
@@ -95,22 +96,80 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
-        # Accept common vendor-specific key names so users need not rename theirs.
-        api_key = (
-            _env("LLM_API_KEY")
-            or _env("OPENAI_API_KEY")
-            or _env("OPENROUTER_API_KEY")
-            or _env("DEEPSEEK_API_KEY")
-            or _env("GROQ_API_KEY")
-        )
-        return cls(
-            api_key=api_key,
-            model=_env("LLM_MODEL", "gpt-4o-mini"),
-            base_url=_env("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-            temperature=_env_float("LLM_TEMPERATURE", 0.3),
-            max_tokens=_env_int("LLM_MAX_TOKENS", 1600),
-            timeout=_env_int("LLM_TIMEOUT", 90),
-        )
+        candidates = cls.candidates_from_env()
+        return candidates[0] if candidates else cls()
+
+    @classmethod
+    def candidates_from_env(cls) -> List["LLMConfig"]:
+        """Return configured endpoints in cost-aware fallback order."""
+        common = {
+            "temperature": _env_float("LLM_TEMPERATURE", 0.3),
+            "max_tokens": _env_int("LLM_MAX_TOKENS", 1600),
+            "timeout": _env_int("LLM_TIMEOUT", 90),
+        }
+        if _env("LLM_API_KEY"):
+            return [
+                cls(
+                    api_key=_env("LLM_API_KEY"),
+                    model=_env("LLM_MODEL", "gpt-4o-mini"),
+                    base_url=_env("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+                    provider="custom",
+                    **common,
+                )
+            ]
+
+        specs = {
+            "groq": (
+                "GROQ_API_KEY",
+                "GROQ_MODEL",
+                "openai/gpt-oss-20b",
+                "https://api.groq.com/openai/v1",
+            ),
+            "gemini": (
+                "GEMINI_API_KEY",
+                "GEMINI_MODEL",
+                "gemini-3.7-flash",
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+            ),
+            "deepseek": (
+                "DEEPSEEK_API_KEY",
+                "DEEPSEEK_MODEL",
+                "deepseek-v4-flash",
+                "https://api.deepseek.com",
+            ),
+            "openai": (
+                "OPENAI_API_KEY",
+                "OPENAI_MODEL",
+                "gpt-4o-mini",
+                "https://api.openai.com/v1",
+            ),
+            "openrouter": (
+                "OPENROUTER_API_KEY",
+                "OPENROUTER_MODEL",
+                "openai/gpt-4o-mini",
+                "https://openrouter.ai/api/v1",
+            ),
+        }
+        raw_order = _env("AI_PROVIDER_ORDER", "groq,gemini,deepseek,openai,openrouter")
+        order = [item.strip().lower() for item in raw_order.split(",") if item.strip()]
+        candidates: List[LLMConfig] = []
+        for provider in order:
+            if provider not in specs:
+                continue
+            key_var, model_var, default_model, base_url = specs[provider]
+            key = _env(key_var)
+            if not key:
+                continue
+            candidates.append(
+                cls(
+                    api_key=key,
+                    model=_env(model_var, default_model),
+                    base_url=base_url,
+                    provider=provider,
+                    **common,
+                )
+            )
+        return candidates
 
 
 @dataclass

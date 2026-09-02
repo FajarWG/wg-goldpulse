@@ -1,0 +1,11 @@
+[Unit]
+Description=Run WG GoldPulse backtest after the weekly XAUUSD session closes
+
+[Timer]
+OnCalendar=Sat *-*-* 07:30:00 Asia/Tokyo
+Persistent=true
+AccuracySec=5min
+Unit=xauusd-backtest.service
+
+[Install]
+WantedBy=timers.target

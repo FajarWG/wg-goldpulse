@@ -1,0 +1,25 @@
+[Unit]
+Description=WG GoldPulse weekly historical backtest
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/xauusd-analysis
+EnvironmentFile=/etc/xauusd-analysis.env
+ExecStart=/opt/xauusd-analysis/.venv/bin/python /opt/xauusd-analysis/backtest_main.py --strategy all --refresh --notify
+Nice=10
+CPUWeight=20
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=15min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xauusd-analysis
+
+[Install]
+WantedBy=multi-user.target
