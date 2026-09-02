@@ -30,16 +30,9 @@ def stats_keyboard() -> Dict[str, Any]:
     }
 
 
-def signal_keyboard(signal_id: str) -> Dict[str, Any]:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Ambil", "callback_data": f"take:{signal_id}"},
-                {"text": "⏭ Lewati", "callback_data": f"skip:{signal_id}"},
-            ],
-            *stats_keyboard()["inline_keyboard"],
-        ]
-    }
+def signal_keyboard() -> Dict[str, Any]:
+    """Actions available below a signal; execution decisions stay with the user."""
+    return stats_keyboard()
 
 
 def send_telegram(

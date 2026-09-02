@@ -13,6 +13,7 @@ import pandas as pd
 
 from .analysis import align_timeframes, analyse_timeframe
 from .instruments import parse_symbol
+from .product import CURRENT_STRATEGY_VERSION
 from .providers import TwelveDataProvider, resample
 from .smc import evaluate
 
@@ -95,11 +96,11 @@ def load_backtest_data(
     fetched: List[str] = []
     m5_path = cache_dir / "XAUUSD_M5.csv"
     old_m5 = _read_frame(m5_path) if m5_path.exists() else pd.DataFrame()
+    now = pd.Timestamp.now(tz="UTC").floor("5min")
+    desired_start = now - timedelta(days=max(int(lookback_days), 14))
     if not refresh and not old_m5.empty:
-        frames["M5"] = old_m5
+        frames["M5"] = old_m5.loc[old_m5.index >= desired_start]
     else:
-        now = pd.Timestamp.now(tz="UTC").floor("5min")
-        desired_start = now - timedelta(days=max(int(lookback_days), 14))
         pieces = [old_m5] if not old_m5.empty else []
         ranges = []
         if old_m5.empty or old_m5.index.min() > desired_start + timedelta(days=1):
@@ -115,9 +116,10 @@ def load_backtest_data(
                 cursor = chunk_end
         combined = pd.concat(pieces).sort_index()
         combined = combined[~combined.index.duplicated(keep="last")]
-        combined = combined.loc[combined.index >= desired_start]
+        # Keep older cached history for future research; lookback controls the
+        # replay window, not whether historical data is destroyed on refresh.
         _write_frame(m5_path, combined)
-        frames["M5"] = combined
+        frames["M5"] = combined.loc[combined.index >= desired_start]
         fetched.append("M5")
 
     for timeframe, bars in _FETCH_BARS.items():
@@ -181,7 +183,7 @@ def _resolve_trade(
 
 
 def _strategy_allows(reading, timestamp: pd.Timestamp, strategy_version: str) -> bool:
-    if strategy_version == "v1":
+    if strategy_version in ("v1", CURRENT_STRATEGY_VERSION):
         return True
     if strategy_version not in ("v2", "v3", "v3.1", "v4"):
         raise ValueError(f"unsupported strategy version: {strategy_version}")
@@ -214,7 +216,7 @@ def _strategy_allows(reading, timestamp: pd.Timestamp, strategy_version: str) ->
 
 def _strategy_time_allows(timestamp: pd.Timestamp, strategy_version: str) -> bool:
     """Cheap pre-filter for time rules that do not depend on indicator state."""
-    if strategy_version == "v1":
+    if strategy_version in ("v1", CURRENT_STRATEGY_VERSION):
         return True
     if strategy_version not in ("v2", "v3", "v3.1", "v4"):
         raise ValueError(f"unsupported strategy version: {strategy_version}")
@@ -232,33 +234,46 @@ def monte_carlo_pvalue(
     iterations: int = 500,
     seed: int = 42,
 ) -> Optional[float]:
-    """Permutation-test p-value: how often shuffled trade order beats the actual.
+    """One-sided sign-randomisation p-value for positive expectancy.
 
-    The observed total-R is compared against total-R from randomly shuffled
-    trade sequences (Monte Carlo). A low p-value means the sequence is unlikely
-    to be pure luck. Returns None when there are too few trades to permute.
+    Shuffling trade order cannot change total R, so the null distribution keeps
+    each trade's absolute R and randomises only its win/loss sign. The returned
+    value estimates how often a zero-edge process produces mean R at least as
+    large as the observed sample. Returns ``None`` for fewer than eight trades.
     """
     if len(trades) < 8:
         return None
+    if iterations < 1:
+        raise ValueError("iterations must be at least 1")
     results = np.array([float(t.result_r) for t in trades], dtype=float)
-    observed = float(results.sum())
+    observed = float(results.mean())
+    magnitudes = np.abs(results)
     rng = np.random.default_rng(seed)
     beats = 0
     for _ in range(iterations):
-        shuffled = rng.permutation(results)
-        if float(shuffled.sum()) >= observed:
+        signs = rng.choice((-1.0, 1.0), size=len(results))
+        null_mean = float((magnitudes * signs).mean())
+        if null_mean >= observed:
             beats += 1
     return round((beats + 1) / (iterations + 1), 3)
 
 
 def run_backtest(
     frames: Dict[str, pd.DataFrame],
-    strategy_version: str = "v1",
+    strategy_version: str = CURRENT_STRATEGY_VERSION,
     timeout_minutes: int = 240,
     max_per_day: int = 3,
     cooldown_minutes: int = 45,
 ) -> Tuple[BacktestSummary, List[BacktestTrade]]:
     m5 = frames["M5"].copy().sort_index()
+    macro_frames = [frames.get(name) for name in ("H1", "H4", "D1")]
+    if all(frame is not None and not frame.empty for frame in macro_frames):
+        # Candles before every macro timeframe is available cannot produce a
+        # valid live-equivalent signal. Keep 500 M5 bars only as indicator
+        # warm-up and avoid replaying years of knowingly ineligible data.
+        macro_start = max(frame.index.min() for frame in macro_frames if frame is not None)
+        replay_start = macro_start - timedelta(minutes=5 * 500)
+        m5 = m5.loc[m5.index >= replay_start]
     now = pd.Timestamp.now(tz="UTC")
     if not m5.empty and m5.index[-1] + timedelta(minutes=5) > now:
         m5 = m5.iloc[:-1]
@@ -292,7 +307,12 @@ def run_backtest(
         m15_window = m15.iloc[max(0, m15_end - 200) : m15_end]
         if len(m15_window) < 35:
             continue
-        reading = evaluate(m5_window, m15_window, _macro_bias(frames, timestamp, macro_cache))
+        reading = evaluate(
+            m5_window,
+            m15_window,
+            _macro_bias(frames, timestamp, macro_cache),
+            include_context=False,
+        )
         evaluations += 1
         max_score = max(max_score, reading.confluence_score)
         if reading.action not in ("LONG", "SHORT"):
@@ -420,7 +440,7 @@ def format_backtest(summary: BacktestSummary) -> str:
             f"📈 Total: {summary.total_r:+.1f}R",
             f"📉 Max drawdown: {summary.max_drawdown_r:.1f}R",
             f"⚖️ Profit factor: {factor}",
-            f"🎲 P-value (Monte Carlo): {p_value}",
+            f"🎲 P-value (sign-randomisation): {p_value}",
             f"🌡️ Regime: {regime_text}",
             f"🔎 Skor kandidat tertinggi: {summary.max_candidate_score}/100",
             "━━━━━━━━━━━━━━━━",

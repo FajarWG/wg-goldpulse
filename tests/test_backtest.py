@@ -10,6 +10,7 @@ from forex.backtest import (
     _strategy_allows,
     _strategy_time_allows,
     format_backtest,
+    load_backtest_data,
     load_latest_summary,
     monte_carlo_pvalue,
     save_backtest,
@@ -163,7 +164,7 @@ def test_backtest_summary_format_shows_new_fields(tmp_path):
         regime_breakdown={"normal": 8, "high_vol": 2},
     )
     text = format_backtest(summary)
-    assert "P-value (Monte Carlo): 0.020" in text
+    assert "P-value (sign-randomisation): 0.020" in text
     assert "Regime: high_vol: 2, normal: 8" in text
 
 
@@ -194,7 +195,58 @@ def test_monte_carlo_pvalue_deterministic_and_bounded():
     second = monte_carlo_pvalue(trades, iterations=100)
     assert first == second  # seeded -> deterministic
     assert 0.0 <= first <= 1.0
+    assert first < 1.0
 
 
 def test_monte_carlo_pvalue_none_for_few_trades():
     assert monte_carlo_pvalue([]) is None
+
+
+def test_cached_replay_respects_lookback_without_deleting_history(tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    now = pd.Timestamp.now(tz="UTC").floor("5min")
+    index = pd.date_range(now - pd.Timedelta(days=120), now, periods=121)
+    frame = pd.DataFrame(
+        {
+            "open": range(121),
+            "high": range(1, 122),
+            "low": range(121),
+            "close": range(1, 122),
+        },
+        index=index,
+    )
+    for timeframe in ("M5", "H1", "H4", "D1"):
+        frame.to_csv(cache / f"XAUUSD_{timeframe}.csv")
+
+    frames, fetched = load_backtest_data(cache, lookback_days=30)
+
+    assert fetched == []
+    assert frames["M5"].index.min() >= now - pd.Timedelta(days=30)
+    assert len(pd.read_csv(cache / "XAUUSD_M5.csv")) == 121
+
+
+def test_monte_carlo_pvalue_detects_strong_positive_expectancy():
+    trades = [
+        BacktestTrade(
+            opened_at="2026-01-01T00:00:00+00:00",
+            closed_at="2026-01-01T01:00:00+00:00",
+            direction="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            take_profit=102.0,
+            score=70,
+            macro_bias="up",
+            m15_structure="bullish",
+            m5_structure="bullish",
+            rsi=50.0,
+            liquidity_event=None,
+            fvg=None,
+            candle_pattern=None,
+            result="win" if i < 10 else "loss",
+            result_r=2.0 if i < 10 else -1.0,
+            ambiguous=False,
+        )
+        for i in range(12)
+    ]
+    assert monte_carlo_pvalue(trades, iterations=5000) < 0.05

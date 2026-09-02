@@ -403,6 +403,12 @@ class TestNotifyGuards:
         assert notify_module.send_telegram("hi", TelegramConfig(bot_token="t", chat_id="1"))
         assert captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ai"
         assert captured["reply_markup"]["inline_keyboard"][0][1]["callback_data"] == "stats"
+        callbacks = {
+            button["callback_data"]
+            for row in captured["reply_markup"]["inline_keyboard"]
+            for button in row
+        }
+        assert not any(value.startswith(("take:", "skip:")) for value in callbacks)
 
 
 class TestLLMGuards:

@@ -6,24 +6,31 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 from forex.backtest import (
     format_backtest,
-    format_comparison,
     load_backtest_data,
     run_backtest,
     save_backtest,
 )
 from forex.config import Config
 from forex.notify import send_telegram
+from forex.product import CURRENT_STRATEGY_VERSION
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--refresh", action="store_true", help="refresh cached candles from Twelve Data")
     parser.add_argument("--notify", action="store_true", help="send the result to Telegram")
-    parser.add_argument("--strategy", choices=("v1", "v2", "v3", "v3.1", "v4", "all"), default="v1")
+    parser.add_argument(
+        "--strategy",
+        choices=("v1", "v2", "v3", "v3.1", "v4", CURRENT_STRATEGY_VERSION, "all"),
+        default=CURRENT_STRATEGY_VERSION,
+    )
     parser.add_argument("--lookback-days", type=int, default=None)
     parser.add_argument("--output-label", default="")
     parser.add_argument(
@@ -49,7 +56,7 @@ def main() -> int:
         print(f"Cached candles: {counts}")
         print(f"Data fetched: {', '.join(fetched) if fetched else 'none (cache)'}")
         return 0
-    versions = ("v1", "v2") if args.strategy == "all" else (args.strategy,)
+    versions = (CURRENT_STRATEGY_VERSION,) if args.strategy == "all" else (args.strategy,)
     results = {}
     for version in versions:
         summary, trades = run_backtest(
@@ -61,13 +68,10 @@ def main() -> int:
         )
         label = args.output_label if len(versions) == 1 and args.output_label else version
         save_backtest(backtest_dir / label, summary, trades)
-        if version == "v1":
+        if version == CURRENT_STRATEGY_VERSION:
             save_backtest(backtest_dir, summary, trades)
         results[version] = summary
-    if args.strategy == "all":
-        text = format_comparison(results["v1"], results["v2"])
-    else:
-        text = format_backtest(results[args.strategy])
+    text = format_backtest(results[CURRENT_STRATEGY_VERSION if args.strategy == "all" else args.strategy])
     print(text)
     print(f"Data fetched: {', '.join(fetched) if fetched else 'none (cache)'}")
     if args.notify and config.telegram.enabled:

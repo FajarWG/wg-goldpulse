@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from .product import CURRENT_STRATEGY_VERSION
+
 
 @dataclass(frozen=True)
 class SignalStats:
@@ -46,7 +48,11 @@ def _iso(value: datetime) -> str:
 class SignalTracker:
     """Store paper signals and resolve them against subsequent closed candles."""
 
-    def __init__(self, path: Path | str, strategy_version: str = "v1") -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        strategy_version: str = CURRENT_STRATEGY_VERSION,
+    ) -> None:
         self.path = Path(path)
         self.strategy_version = strategy_version
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +63,8 @@ class SignalTracker:
         path = os.getenv("SIGNAL_TRACKING_DB", "").strip()
         if not path:
             return None
-        return cls(path, os.getenv("SIGNAL_STRATEGY_VERSION", "v1").strip() or "v1")
+        version = os.getenv("SIGNAL_STRATEGY_VERSION", CURRENT_STRATEGY_VERSION).strip()
+        return cls(path, version or CURRENT_STRATEGY_VERSION)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -353,24 +360,28 @@ def format_stats_footer(stats: SignalStats) -> str:
         rate = f"{stats.win_rate:.1f}%"
     return "\n".join(
         [
-            "📊 REKAP SIGNAL",
-            "━━━━━━━━━━━━━━━━",
-            f"🏁 Selesai dinilai: {stats.completed}",
+            "📊 STATISTIK FORWARD TEST",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"Signal tercatat: {stats.total}",
+            f"Sudah selesai: {stats.completed}",
             "",
+            "HASIL SELESAI",
             f"✅ Benar: {stats.wins}",
             f"❌ Salah: {stats.losses}",
             f"🎯 Win rate: {rate}",
             "",
+            "STATUS LAIN",
             f"⏳ Masih aktif: {stats.active}",
             f"⌛ Kedaluwarsa: {stats.expired}",
-            f"📈 Akumulasi: {stats.total_r:+.1f}R",
-            "━━━━━━━━━━━━━━━━",
+            f"📈 Akumulasi hasil: {stats.total_r:+.1f}R",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "Win rate hanya menghitung signal yang sudah menyentuh TP atau SL.",
         ]
     )
 
 
 def append_stats_footer(text: str) -> str:
-    marker = "📊 REKAP SIGNAL"
+    marker = "📊 STATISTIK FORWARD TEST"
     if marker in text:
         return text
     tracker = SignalTracker.from_env()

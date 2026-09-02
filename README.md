@@ -12,6 +12,7 @@ WG GoldPulse adalah bot analisis XAU/USD untuk Ubuntu/VPS. Sistem mengambil data
 | V2 | Kandidat/shadow | Locked holdout: +1R, PF 1,05 |
 | V3/V3.1 | Riset gagal | Tidak mencapai promotion gate |
 | V4 | Riset gagal | Development 75,3% WR, tetapi locked holdout hanya 54,4% dan −10,8R setelah cost |
+| V5 | Eksperimen/forward-test | 27 Apr–1 Sep 2026: 31,9% WR, −6R, PF 0,94; belum lolos promotion gate |
 
 Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus diperlakukan sebagai eksperimen manual, bukan instruksi trading.
 
@@ -20,9 +21,9 @@ Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus d
 - Analisis H1/H4/D1 dengan EMA, RSI, MACD, ATR, Bollinger, Donchian, volatility regime, support, dan resistance.
 - Konfirmasi M5/M15 berbasis market structure, BOS, liquidity sweep, FVG, candle pattern, dan confluence score.
 - Signal LONG/SHORT/WAIT dengan entry, batas salah/SL, dan target referensi.
-- Telegram commands dan inline buttons untuk statistik, backtest, bantuan, Ambil, dan Lewati.
+- Telegram commands dan inline buttons untuk analisis AI, statistik, backtest, dan bantuan. Tidak ada tombol Ambil/Lewati.
 - Forward validation otomatis: menang, kalah, expired, win rate, dan akumulasi R.
-- Historical replay V1–V4 dengan cache data UTC, versioned output, drawdown, profit factor, p-value Monte Carlo, dan breakdown regime.
+- Historical replay strategi aktif V5 dengan cache data UTC, versioned output, drawdown, profit factor, p-value sign-randomisation, dan breakdown regime. V1–V4 tetap terdokumentasi sebagai riset lama.
 - Dual Twelve Data API key, quota accounting, failover, throttling, dan retry.
 - AI explanation **on-demand** (fallback Groq → Gemini → DeepSeek): tidak pernah otomatis. Dipicu manual via `python main.py --ai`, tombol "AI Analisis" di desktop, atau `/ai`/tombol 🤖 di Telegram.
 - systemd services/timers untuk market analysis, signal checks, Telegram listener, dan weekly backtest.
@@ -44,7 +45,7 @@ Isi `.env` secara lokal. Jangan commit API key atau token.
 python main.py --symbols XAUUSD --timeframes H1,H4,D1 --stdout
 python main.py --symbols XAUUSD --ai --stdout   # tambahkan penjelasan AI (manual)
 python signal_main.py
-python backtest_main.py --strategy all
+python backtest_main.py --strategy v5
 python telegram_bot_main.py
 ```
 

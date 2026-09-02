@@ -14,9 +14,14 @@ import requests
 
 from forex.config import Config, TelegramConfig
 from forex.notify import send_telegram, stats_keyboard
-from forex.backtest import format_backtest, format_comparison, load_latest_summary
+from forex.backtest import format_backtest, load_latest_summary
 from forex.llm import generate_commentary
-from forex.product import BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION, bot_name
+from forex.product import (
+    BOT_DESCRIPTION,
+    BOT_SHORT_DESCRIPTION,
+    CURRENT_STRATEGY_VERSION,
+    bot_name,
+)
 from forex.tracking import SignalTracker, format_stats_footer
 from forex.usage import tracker_from_env
 
@@ -43,25 +48,6 @@ def _answer(config: TelegramConfig, callback_id: str, text: str, alert: bool = F
     )
 
 
-def _mark_decision(config: TelegramConfig, query: Dict[str, Any], decision: str) -> None:
-    message = query.get("message") or {}
-    label = "✅ Dipilih: Ambil" if decision == "take" else "⏭ Dipilih: Lewati"
-    _post(
-        config,
-        "editMessageReplyMarkup",
-        {
-            "chat_id": message.get("chat", {}).get("id"),
-            "message_id": message.get("message_id"),
-            "reply_markup": {
-                "inline_keyboard": [
-                    [{"text": label, "callback_data": "noop"}],
-                    stats_keyboard()["inline_keyboard"][0],
-                ]
-            },
-        },
-    )
-
-
 def _help_text() -> str:
     return "\n".join(
         [
@@ -77,7 +63,8 @@ def _help_text() -> str:
             "AI hanya dipicu manual lewat /ai atau tombol 🤖 Analisis AI — "
             "tidak pernah otomatis di notifikasi harian.",
             "",
-            "Saat signal READY, gunakan tombol Ambil atau Lewati. Hasil signal tetap dinilai otomatis.",
+            "Semua signal siap dicatat dan dinilai otomatis sampai TP, SL, atau kedaluwarsa. "
+            "Bot tidak mengeksekusi transaksi.",
         ]
     )
 
@@ -85,13 +72,11 @@ def _help_text() -> str:
 def _backtest_text() -> str:
     state_dir = Path(os.getenv("FOREX_STATE_DIR", "/var/lib/xauusd-analysis"))
     root = state_dir / "backtest"
-    v1 = load_latest_summary(root / "v1" / "latest.json") or load_latest_summary(root / "latest.json")
-    v2 = load_latest_summary(root / "v2" / "latest.json")
-    if v1 is not None and v2 is not None:
-        return format_comparison(v1, v2)
-    if v1 is None:
+    current = load_latest_summary(root / CURRENT_STRATEGY_VERSION / "latest.json")
+    current = current or load_latest_summary(root / "latest.json")
+    if current is None:
         return "🧪 Backtest belum tersedia. Backtest otomatis dijalankan setiap Sabtu setelah pasar tutup."
-    return format_backtest(v1)
+    return format_backtest(current)
 
 
 def _usage_text() -> str:
@@ -143,16 +128,16 @@ def _ai_text() -> str:
             "lalu minta AI lagi."
         )
     try:
-        commentary = generate_commentary(payload, config.llm)
+        metadata: Dict[str, Any] = {}
+        commentary = generate_commentary(payload, config.llm, metadata=metadata)
     except Exception as exc:
         logger.warning("AI commentary failed (%s)", type(exc).__name__)
         return "🤖 Gagal menghasilkan analisis AI. Coba lagi nanti."
     if not commentary:
         return "🤖 Penyedia AI tidak membalas. Coba lagi nanti."
     provider = ""
-    candidates = config.llm.candidates_from_env()
-    if candidates:
-        provider = f"\n_(sumber: {candidates[0].provider} · {candidates[0].model})_"
+    if metadata.get("provider"):
+        provider = f"\nSumber: {metadata['provider']} · {metadata.get('model', 'model default')}"
     return f"🤖 ANALISIS AI (XAUUSD & pasangan){provider}\n\n{commentary}"
 
 
@@ -207,25 +192,7 @@ def handle_callback(
         _answer(config, callback_id, "Membuka bantuan")
         send_telegram(_help_text(), config)
         return
-    if data == "noop":
-        _answer(config, callback_id, "Keputusan sudah tersimpan.")
-        return
-    if ":" not in data:
-        _answer(config, callback_id, "Tombol tidak dikenali.", alert=True)
-        return
-
-    decision, signal_id = data.split(":", 1)
-    result = tracker.record_decision(signal_id, decision, chat_id)
-    if result == "saved":
-        word = "diambil" if decision == "take" else "dilewati"
-        _answer(config, callback_id, f"Signal berhasil {word}.")
-        _mark_decision(config, query, decision)
-    elif result.startswith("already:"):
-        _answer(config, callback_id, "Keputusan signal ini sudah tersimpan.", alert=True)
-    elif result == "closed":
-        _answer(config, callback_id, "Signal sudah selesai dinilai.", alert=True)
-    else:
-        _answer(config, callback_id, "Signal tidak ditemukan.", alert=True)
+    _answer(config, callback_id, "Tombol tidak dikenali.", alert=True)
 
 
 def main() -> int:

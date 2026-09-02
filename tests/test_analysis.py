@@ -300,6 +300,32 @@ class TestCandlePatterns:
     def test_empty_on_single_candle(self):
         assert candle_patterns(make_candles(n=1)) == []
 
+    def test_bearish_harami_requires_opposite_colour_inside_prior_body(self):
+        df = pd.DataFrame(
+            {
+                "open": [10.0, 11.5],
+                "high": [12.2, 11.7],
+                "low": [9.8, 10.3],
+                "close": [12.0, 10.5],
+            }
+        )
+        patterns = {item["pattern"] for item in candle_patterns(df)}
+        assert "bearish_harami" in patterns
+        assert "bullish_harami" not in patterns
+
+    def test_bullish_harami_requires_opposite_colour_inside_prior_body(self):
+        df = pd.DataFrame(
+            {
+                "open": [12.0, 10.5],
+                "high": [12.2, 11.7],
+                "low": [9.8, 10.3],
+                "close": [10.0, 11.5],
+            }
+        )
+        patterns = {item["pattern"] for item in candle_patterns(df)}
+        assert "bullish_harami" in patterns
+        assert "bearish_harami" not in patterns
+
 
 class TestSupportResistanceClusters:
     def test_returns_list_of_levels(self):
@@ -335,3 +361,14 @@ class TestCompositeVote:
     def test_composite_included_in_read(self, uptrend):
         read = analyse_timeframe(uptrend, EURUSD, "H1")
         assert read.composite.get("vote") in {"long", "short", "neutral"}
+
+    def test_bollinger_position_uses_latest_close_not_middle_band(self):
+        df = make_candles(n=80, drift=0.0002, noise=0.0004)
+        bands = bollinger(df["close"], 20, 2.0).dropna()
+        row = bands.iloc[-1]
+        expected = (float(df["close"].iloc[-1]) - row["lower"]) / (
+            row["upper"] - row["lower"]
+        )
+        read = analyse_timeframe(df, EURUSD, "H1")
+        assert read.momentum.bollinger_position == round(float(expected), 3)
+        assert read.momentum.bollinger_position != 0.5

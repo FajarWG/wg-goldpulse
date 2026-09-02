@@ -9,6 +9,9 @@ def bot_name() -> str:
     return os.getenv("BOT_DISPLAY_NAME", "WG GoldPulse").strip() or "WG GoldPulse"
 
 
+CURRENT_STRATEGY_VERSION = "v5"
+
+
 BOT_DESCRIPTION = (
     "Asisten analisis XAUUSD multi-timeframe dengan signal SMC, validasi hasil, "
     "historical backtest, AI explanation, dan pemantauan kuota data. "

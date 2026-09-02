@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from signal_main import _telegram_text
+
 from forex.providers import resample
 from forex.smc import evaluate, market_structure
 
@@ -75,3 +77,35 @@ def test_high_volatility_regime_blocks_directional_signal():
     if reading.regime == "high_vol":
         assert reading.action == "WAIT"
         assert any("high-volatility" in caution for caution in reading.cautions)
+
+
+def test_volume_bonus_requires_explicit_candidate_direction(monkeypatch):
+    m5 = _trend_frame(direction=-1)
+    monkeypatch.setattr("forex.smc.liquidity_sweep", lambda frame, atr: None)
+    monkeypatch.setattr("forex.smc.recent_fvg", lambda frame, atr: None)
+    monkeypatch.setattr("forex.smc.candle_pattern", lambda frame: None)
+    monkeypatch.setattr(
+        "forex.smc.composite_vote",
+        lambda frame: {
+            "trend": "short",
+            "mean_reversion": "neutral",
+            "volume": "long",
+            "vote": "neutral",
+            "volume_confirm": False,
+        },
+    )
+    reading = evaluate(m5, resample(m5, "15min"), "down")
+    assert reading.action == "SHORT"
+    assert reading.confluence_score == 65
+    assert reading.volume_confirm is False
+    assert not any("volume confirms downside" in reason for reason in reading.reasons)
+
+
+def test_signal_message_is_human_readable_and_has_no_trade_decision_buttons():
+    m5 = _trend_frame(direction=1)
+    reading = evaluate(m5, resample(m5, "15min"), "up")
+    text = _telegram_text(reading)
+    assert "SIGNAL SIAP BUY" in text
+    assert "📍 RENCANA HARGA" in text
+    assert "Skor adalah kekuatan konfirmasi" in text
+    assert "Ambil" not in text and "Lewati" not in text

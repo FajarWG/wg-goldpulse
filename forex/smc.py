@@ -181,7 +181,12 @@ def candle_pattern(frame: pd.DataFrame) -> Optional[str]:
     return None
 
 
-def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading:
+def evaluate(
+    m5: pd.DataFrame,
+    m15: pd.DataFrame,
+    macro_bias: str,
+    include_context: bool = True,
+) -> SMCReading:
     if len(m5) < 35 or len(m15) < 35:
         raise ValueError("at least 35 closed candles are required on M5 and M15")
 
@@ -207,7 +212,7 @@ def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading
         hysteresis_state = "off"
 
     sr_levels: List[Dict[str, Any]] = []
-    if len(m5) >= 30:
+    if include_context and len(m5) >= 30:
         sr_levels = support_resistance_clusters(m5, window=5, tolerance_frac=0.002)
 
     long_score = 0
@@ -281,11 +286,16 @@ def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading
         short_reasons.append(f"M5 RSI overbought ({rsi:.1f})")
 
     direction = "long" if long_score >= short_score else "short"
-    volume_confirm = composite.get("volume_confirm")
-    if volume_confirm is True and direction == "long":
+    volume_direction = composite.get("volume", "neutral")
+    volume_confirm = (
+        volume_direction == direction
+        if volume_direction in ("long", "short")
+        else None
+    )
+    if volume_direction == "long" and direction == "long":
         long_score += 5
         long_reasons.append("M5 volume confirms upside")
-    elif volume_confirm is False and direction == "short":
+    elif volume_direction == "short" and direction == "short":
         short_score += 5
         short_reasons.append("M5 volume confirms downside")
 

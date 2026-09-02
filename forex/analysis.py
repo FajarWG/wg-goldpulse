@@ -241,9 +241,15 @@ def candle_patterns(df: pd.DataFrame) -> List[Dict[str, Any]]:
     elif not current_bullish and previous_bullish and close <= p_open and open_ >= p_close:
         _add("bearish_engulfing", -1)
 
-    if current_bullish and previous_bullish and open_ >= p_close and close <= p_open:
+    previous_body_low = min(p_open, p_close)
+    previous_body_high = max(p_open, p_close)
+    current_inside_previous = (
+        min(open_, close) >= previous_body_low
+        and max(open_, close) <= previous_body_high
+    )
+    if previous_bullish and not current_bullish and current_inside_previous:
         _add("bearish_harami", -1)
-    elif not current_bullish and not previous_bullish and open_ <= p_close and close >= p_open:
+    elif not previous_bullish and current_bullish and current_inside_previous:
         _add("bullish_harami", +1)
 
     if current_bullish and not previous_bullish and open_ < p_close and close > (p_open + p_close) / 2:
@@ -497,9 +503,8 @@ def composite_vote(df: pd.DataFrame) -> Dict[str, Any]:
     - volume: OBV slope over 20 bars, kept only when volume data is usable
 
     The vote is ``"long"``, ``"short"`` or ``"neutral"``; volume confirmation
-    is deliberately conservative (``False``) when the series carries constant or
-    flat volume, which prevents synthetic or sparse data from generating false
-    confirmations.
+    is ``None`` when trend or volume direction is unavailable. Constant or flat
+    volume therefore cannot fabricate a confirmation.
     """
     if len(df) < 2:
         return {"trend": "neutral", "mean_reversion": "neutral", "volume": "neutral", "vote": "neutral"}
@@ -522,7 +527,7 @@ def composite_vote(df: pd.DataFrame) -> Dict[str, Any]:
         row = bands.iloc[-1]
         width = row["upper"] - row["lower"]
         if width > 0 and row["middle"] == row["middle"]:
-            position = float((row["middle"] - row["lower"]) / width)
+            position = float((close.iloc[-1] - row["lower"]) / width)
             if rsi_value >= 65 or position >= 0.8:
                 mean_reversion = "short"
             elif rsi_value <= 35 or position <= 0.2:
@@ -581,7 +586,9 @@ def _analyse_momentum(df: pd.DataFrame, rsi_period: int) -> MomentumRead:
         row = bands.iloc[-1]
         width = row["upper"] - row["lower"]
         if width > 0:
-            bollinger_position = _round(float((row["middle"] - row["lower"]) / width), 3)
+            bollinger_position = _round(
+                float((df["close"].iloc[-1] - row["lower"]) / width), 3
+            )
             if bollinger_position is not None:
                 note += (
                     f"; price at {bollinger_position:.0%} of the Bollinger band"
@@ -594,12 +601,10 @@ def _analyse_momentum(df: pd.DataFrame, rsi_period: int) -> MomentumRead:
         if volume_series.nunique() > 1 and len(df) >= 25:
             obv_series = obv(df)
             slope = float(obv_series.iloc[-1]) - float(obv_series.iloc[-25])
-            if slope > 0:
-                volume_confirm = True
-            elif slope < 0:
-                volume_confirm = False
-            if volume_confirm is not None:
-                note += "; volume supports the move" if volume_confirm else "; volume fading the move"
+            price_change = float(df["close"].iloc[-1]) - float(df["close"].iloc[-25])
+            if slope != 0 and price_change != 0:
+                volume_confirm = (slope > 0) == (price_change > 0)
+                note += "; volume confirms price direction" if volume_confirm else "; volume diverges from price"
 
     candle = None
     detected = candle_patterns(df)

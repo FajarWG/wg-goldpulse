@@ -8,7 +8,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from forex.config import Config
 from forex.instruments import parse_symbol
@@ -65,27 +65,66 @@ def _append_event(path: Path, event: Dict[str, Any]) -> None:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
-def _telegram_text(reading: SMCReading) -> str:
+def _telegram_text(reading: SMCReading, generated_at: Optional[datetime] = None) -> str:
+    generated_at = generated_at or datetime.now(timezone.utc)
+    action_label = {"LONG": "BUY", "SHORT": "SELL"}.get(reading.action, reading.action)
+    macro_label = {
+        "up": "naik",
+        "down": "turun",
+        "sideways": "sideways",
+        "conflicted": "berlawanan",
+    }.get(reading.macro_bias, reading.macro_bias)
+    structure_label = {
+        "bullish": "bullish",
+        "bearish": "bearish",
+        "range": "sideways",
+        "unknown": "belum jelas",
+    }
+    regime_label = {
+        "normal": "normal",
+        "high_vol": "volatilitas tinggi",
+        "unknown": "belum diketahui",
+    }.get(reading.regime, reading.regime)
+    volume_label = {
+        True: "searah harga",
+        False: "berlawanan dengan harga",
+        None: "tidak tersedia",
+    }[reading.volume_confirm]
     lines = [
-        f"🥇 {bot_name().upper()} — SIGNAL {reading.action}",
-        "Mode evaluasi saja, tidak membuka transaksi otomatis.",
+        f"🥇 {bot_name().upper()} — SIGNAL SIAP {action_label}",
+        f"Waktu: {generated_at:%Y-%m-%d %H:%M} UTC",
+        "━━━━━━━━━━━━━━━━━━━━",
         "",
-        f"Harga saat signal: {reading.price:.2f}",
-        f"Skor konfirmasi: {reading.confluence_score}/100 (bukan peluang menang)",
-        f"Arah besar: {reading.macro_bias} | Struktur M15: {reading.m15_structure} | M5: {reading.m5_structure}",
+        "📍 RENCANA HARGA",
     ]
     if reading.action in ("LONG", "SHORT"):
         lines.extend([
-            "",
-            f"Referensi entry: {reading.entry:.2f}",
-            f"Batas salah / SL: {reading.stop_loss:.2f}",
-            f"Target / TP (2R): {reading.take_profit:.2f}",
+            f"Entry referensi: {reading.entry:.2f}",
+            f"Stop loss: {reading.stop_loss:.2f}",
+            f"Take profit: {reading.take_profit:.2f}",
+            f"Risk/reward: 1:{reading.risk_reward:.1f}",
         ])
+    lines.extend([
+        "",
+        "🔎 KONFIRMASI",
+        f"Skor: {reading.confluence_score}/100",
+        f"Arah H1/H4/D1: {macro_label}",
+        f"Struktur M15: {structure_label.get(reading.m15_structure, reading.m15_structure)}",
+        f"Struktur M5: {structure_label.get(reading.m5_structure, reading.m5_structure)}",
+        f"RSI M5: {reading.rsi:.1f}",
+        f"Kondisi pasar: {regime_label}",
+        f"Volume: {volume_label}",
+        "",
+        "Skor adalah kekuatan konfirmasi, bukan persentase peluang menang.",
+    ])
     if reading.reasons:
-        lines.extend(["", "Alasan signal:", *[f"• {reason}" for reason in reading.reasons]])
+        lines.extend(["", "✅ ALASAN SIGNAL", *[f"• {reason}" for reason in reading.reasons]])
     if reading.cautions:
-        lines.extend(["", "Perhatian:", *[f"• {item}" for item in reading.cautions]])
-    lines.extend(["", "Gunakan sebagai bahan analisis; cocokkan harga dengan broker."])
+        lines.extend(["", "⚠️ PERHATIAN", *[f"• {item}" for item in reading.cautions]])
+    lines.extend([
+        "",
+        "Bot mencatat hasil sampai TP, SL, atau kedaluwarsa. Tidak ada transaksi otomatis.",
+    ])
     return "\n".join(lines)
 
 
@@ -128,9 +167,9 @@ def main() -> int:
     notification_sent = False
     if send and config.telegram.enabled:
         notification_sent = send_telegram(
-            _telegram_text(reading),
+            _telegram_text(reading, now),
             config.telegram,
-            reply_markup=signal_keyboard(tracked_signal_id),
+            reply_markup=signal_keyboard(),
         )
     result_notification_sent = False
     if resolved and not send and config.telegram.enabled:
@@ -145,7 +184,13 @@ def main() -> int:
         if expired:
             changes.append(f"⌛ Kedaluwarsa: +{expired}")
         result_notification_sent = send_telegram(
-            "\n".join(["🔄 HASIL SIGNAL DIPERBARUI", *changes]),
+            "\n".join([
+                "🔄 HASIL SIGNAL SELESAI DINILAI",
+                "━━━━━━━━━━━━━━━━━━━━",
+                *changes,
+                "",
+                "Tekan Statistik untuk melihat rekap lengkap.",
+            ]),
             config.telegram,
         )
 

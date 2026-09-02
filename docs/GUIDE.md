@@ -5,7 +5,7 @@
 **Nama:** WG GoldPulse
 
 **Tagline:** Analisis dan validasi signal XAUUSD—tanpa auto-trading.
-**Deskripsi:** Asisten analisis XAUUSD multi-timeframe dengan signal Smart Money Concepts, pencatatan keputusan manual, validasi hasil otomatis, historical backtest, penjelasan AI, dan pemantauan kuota data.
+**Deskripsi:** Asisten analisis XAUUSD multi-timeframe dengan signal Smart Money Concepts, validasi hasil otomatis, historical backtest, penjelasan AI, dan pemantauan kuota data.
 
 WG GoldPulse tidak terhubung ke akun broker dan tidak membuka transaksi. Entry, SL, dan TP adalah referensi analisis yang tetap harus dicocokkan dengan harga broker.
 
@@ -15,17 +15,16 @@ WG GoldPulse tidak terhubung ke akun broker dan tidak membuka transaksi. Entry, 
 Twelve Data key 1 + key 2
           │
           ├── Setiap jam :00 JST
-          │     H1 + H4 + D1 → tren besar → AI explanation
+          │     H1 + H4 + D1 → tren besar → Telegram market update
           │
           ├── Setiap 5 menit mulai :02 JST
           │     M5 → M15 → SMC/confluence → WAIT atau LONG/SHORT
           │                                      │
           │                                      ├── Telegram
-          │                                      ├── Ambil/Lewati
           │                                      └── SQLite forward validation
           │
           └── Sabtu 07:30 JST
-                Refresh cache → replay V1 + V2 → comparison report
+                Refresh incremental → replay V5 → Telegram backtest report
 ```
 
 Urutan `:00` lalu `:02` memastikan analisis besar diperbarui sebelum pemeriksaan signal pertama pada jam tersebut.
@@ -51,8 +50,8 @@ Urutan `:00` lalu `:02` memastikan analisis besar diperbarui sebelum pemeriksaan
 
 ### 3. Forward validation otomatis
 
-- Semua signal READY disimpan, terlepas dari tombol Ambil/Lewati.
-- TP lebih dulu: menang `+2R` pada strategi live V1.
+- Semua signal READY disimpan dan dinilai otomatis.
+- TP lebih dulu: menang `+2R` pada strategi eksperimen V5.
 - SL lebih dulu: kalah `-1R`.
 - TP dan SL pada candle M5 yang sama: dihitung kalah secara konservatif.
 - Tidak selesai dalam empat jam: kedaluwarsa dan tidak masuk pembagi win rate.
@@ -60,11 +59,12 @@ Urutan `:00` lalu `:02` memastikan analisis besar diperbarui sebelum pemeriksaan
 
 ### 4. Telegram interaktif
 
-- `✅ Ambil` dan `⏭ Lewati` hanya pada signal READY.
+- Tidak ada tombol Ambil/Lewati; keputusan transaksi selalu di luar bot.
+- `🤖 Analisis AI` menjelaskan hasil teknikal terakhir secara manual/on-demand.
 - `📊 Statistik` membuka rekap forward validation.
 - `🧪 Backtest` membuka historical backtest terakhir.
 - `ℹ️ Bantuan` menampilkan cara memakai bot.
-- Keputusan Ambil/Lewati dicatat satu kali dan tidak mengubah hasil objektif signal.
+- Hasil signal objektif tidak dipengaruhi tindakan pengguna di Telegram.
 
 ### 5. AI explanation
 
@@ -89,11 +89,11 @@ Referensi konfigurasi resmi: [Groq OpenAI compatibility](https://console.groq.co
 
 ## Historical backtest
 
-Backtest menyimpan versi strategi secara terpisah agar perubahan aturan tidak menghapus pembanding:
+Backtest menyimpan versi strategi secara terpisah agar perubahan aturan tidak menghapus pembanding. Operasional saat ini hanya memakai:
 
-- **V1 (live/forward):** macro H1/H4/D1, struktur M15, setup M5, target 2R.
-- **V2 (kandidat/shadow):** seluruh macro harus searah, struktur M15 dan M5 searah, hanya pukul 06:00–11:59 UTC, RSI M5 35–65, target 1,25R.
-- Keduanya memakai maksimal tiga signal per hari, cooldown 45 menit, satu posisi simulasi aktif, dan timeout empat jam.
+- **V5 (eksperimen/forward-test):** macro H1/H4/D1, struktur M15/M5, composite vote, regime volatilitas, volume direction, liquidity sweep, FVG, candle pattern, dan target 2R.
+- V5 memakai maksimal tiga signal per hari, cooldown 45 menit, satu posisi simulasi aktif, dan timeout empat jam.
+- V1–V4 adalah arsip riset dan tidak dijalankan oleh service mingguan.
 
 Data yang diambil dan disimpan lokal:
 
@@ -106,12 +106,12 @@ Twelve Data membatasi satu respons historical time series hingga 5.000 data poin
 
 ### Otomatis
 
-Backtest V1 dan V2 berjalan setiap Sabtu pukul 07:30 JST, setelah sesi mingguan XAUUSD ditutup. Hasil tiap versi disimpan sebagai JSON dan CSV, lalu perbandingannya dikirim ke Telegram.
+Backtest V5 berjalan setiap Sabtu pukul 07:30 JST, setelah sesi mingguan XAUUSD ditutup. Cache lama dipertahankan; hanya bagian data terbaru yang diambil. Replay default memakai 90 hari terakhir dan hasil JSON/CSV dikirim ke Telegram.
 
 ### Manual
 
 ```bash
-# Refresh data dan jalankan perbandingan V1 + V2 melalui service
+# Refresh data dan jalankan V5 melalui service
 sudo systemctl start xauusd-backtest.service
 
 # Lihat hasil dari Telegram
@@ -122,10 +122,7 @@ Menjalankan tanpa mengambil data baru:
 
 ```bash
 cd /opt/xauusd-analysis
-sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy all
-
-# Hanya V2, memakai cache yang sudah ada
-sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy v2
+sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy v5
 ```
 
 Hasil utama:
@@ -141,7 +138,28 @@ Hasil utama:
 
 Backtest historis dan forward validation harus dibaca terpisah. Backtest membantu menyaring strategi; forward validation mengukur perilaku sistem pada data baru yang belum pernah dilihat.
 
-## Hasil backtest aktual strategi v1
+## Hasil validasi strategi aktif V5
+
+Validasi setelah koreksi matematika pada 2 September 2026:
+
+```text
+Periode          : 2026-04-27 → 2026-09-01
+Data M5          : 36.496 candle
+Evaluasi         : 23.526
+Signal           : 210
+Menang           : 46
+Kalah            : 98
+Kedaluwarsa      : 66
+Win rate         : 31,9%
+Total            : -6R
+Profit factor    : 0,94
+Maximum drawdown : 20R
+P-value          : 0,687 (sign-randomisation)
+```
+
+Kesimpulan: **V5 belum terbukti memiliki edge dan hanya dijalankan sebagai eksperimen/forward-test.** Skor konfirmasi bukan probabilitas menang. AI tidak boleh mengubah keputusan mesin.
+
+## Arsip hasil strategi v1
 
 Backtest pertama yang lengkap dijalankan pada 1 September 2026:
 
@@ -259,50 +277,65 @@ Timeframe:
 • H4: TURUN · RSI 38.0
 • D1: NAIK · RSI 52.1
 
-🤖 Ringkasan Groq:
-H1 belum memiliki arah yang kuat, sementara H4 dan D1 berlawanan.
-Tunggu keselarasan sebelum memakai signal intraday.
+Belum ada signal arah; tunggu konfirmasi M5/M15.
 
-Gunakan tombol di bawah untuk statistik dan backtest.
-
-[📊 Statistik] [🧪 Backtest]
+[🤖 Analisis AI] [📊 Statistik] [🧪 Backtest]
 [ℹ️ Bantuan]
 ```
 
 ### Signal READY
 
 ```text
-🥇 WG GOLDPULSE — SIGNAL LONG
-Mode evaluasi saja, tidak membuka transaksi otomatis.
+🥇 WG GOLDPULSE — SIGNAL SIAP BUY
+Waktu: 2026-09-02 08:15 UTC
+━━━━━━━━━━━━━━━━━━━━
 
-Harga saat signal: 4450.20
-Skor konfirmasi: 75/100
-Arah besar: up | Struktur M15: bullish | M5: bullish
+📍 RENCANA HARGA
+Entry referensi: 4450.20
+Stop loss: 4443.70
+Take profit: 4463.20
+Risk/reward: 1:2.0
 
-Referensi entry: 4450.20
-Batas salah / SL: 4443.70
-Target / TP (2R): 4463.20
+🔎 KONFIRMASI
+Skor: 75/100
+Arah H1/H4/D1: naik
+Struktur M15: bullish
+Struktur M5: bullish
+RSI M5: 52.4
+Kondisi pasar: normal
+Volume: searah harga
 
-[✅ Ambil] [⏭ Lewati]
-[📊 Statistik] [🧪 Backtest]
+Skor adalah kekuatan konfirmasi, bukan persentase peluang menang.
+
+✅ ALASAN SIGNAL
+• H1/H4/D1 macro bias bullish
+• M15 bullish structure
+• M5 structure bullish
+
+Bot mencatat hasil sampai TP, SL, atau kedaluwarsa. Tidak ada transaksi otomatis.
+
+[🤖 Analisis AI] [📊 Statistik] [🧪 Backtest]
 [ℹ️ Bantuan]
 ```
 
 ### Statistik
 
 ```text
-📊 REKAP SIGNAL
-━━━━━━━━━━━━━━━━
-🏁 Selesai dinilai: 12
+📊 STATISTIK FORWARD TEST
+━━━━━━━━━━━━━━━━━━━━
+Signal tercatat: 15
+Sudah selesai: 12
 
+HASIL SELESAI
 ✅ Benar: 7
 ❌ Salah: 5
 🎯 Win rate: 58.3%
 
+STATUS LAIN
 ⏳ Masih aktif: 1
 ⌛ Kedaluwarsa: 2
-📈 Akumulasi: +9.0R
-━━━━━━━━━━━━━━━━
+📈 Akumulasi hasil: +9.0R
+━━━━━━━━━━━━━━━━━━━━
 ```
 
 ### Backtest
@@ -310,16 +343,20 @@ Target / TP (2R): 4463.20
 ```text
 🧪 WG GOLDPULSE — HISTORICAL BACKTEST
 ━━━━━━━━━━━━━━━━
-Periode: 2026-06-03 → 2026-09-01
-Data M5: 25,921 candle
-Evaluasi: 15,548
+Periode: 2026-04-27 → 2026-09-01
+Data M5: 36,496 candle
+Evaluasi: 23,526
 
-Signal: 165
-✅ Menang: 32
-❌ Kalah: 83
-🎯 Win rate: 27.8%
-📈 Total: -19.0R
-📉 Max drawdown: 19.0R
+Signal: 210
+✅ Menang: 46
+❌ Kalah: 98
+⌛ Kedaluwarsa: 66
+🎯 Win rate: 31.9%
+
+📈 Total: -6.0R
+📉 Max drawdown: 20.0R
+⚖️ Profit factor: 0.94
+🎲 P-value (sign-randomisation): 0.687
 ━━━━━━━━━━━━━━━━
 ```
 
@@ -331,9 +368,9 @@ Signal: 165
 | Indicator engine | Menghitung indikator | Menulis narasi AI |
 | SMC engine | Menentukan WAIT/LONG/SHORT | Membuka order broker |
 | AI router | Menjelaskan hasil | Mengubah angka atau signal |
-| Forward tracker | Menilai signal baru | Mengubah hasil berdasarkan tombol user |
+| Forward tracker | Menilai signal baru | Mengubah hasil berdasarkan tindakan user |
 | Backtest engine | Replay data historis | Menjamin performa masa depan |
-| Telegram | Menampilkan dan menerima pilihan | Menjalankan auto-trading |
+| Telegram | Menampilkan analisis dan statistik | Menjalankan auto-trading |
 
 ## Arah improvement berikutnya
 
