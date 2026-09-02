@@ -143,17 +143,29 @@ class SignalTracker:
         day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         with self._connect() as connection:
             if connection.execute(
-                "SELECT 1 FROM paper_signals WHERE status = 'active' LIMIT 1"
+                """
+                SELECT 1 FROM paper_signals
+                WHERE status = 'active' AND strategy_version = ? LIMIT 1
+                """,
+                (self.strategy_version,),
             ).fetchone():
                 return False
             count = connection.execute(
-                "SELECT COUNT(*) FROM paper_signals WHERE created_at_utc >= ?",
-                (_iso(day_start),),
+                """
+                SELECT COUNT(*) FROM paper_signals
+                WHERE created_at_utc >= ? AND strategy_version = ?
+                """,
+                (_iso(day_start), self.strategy_version),
             ).fetchone()[0]
             if count >= max_per_day:
                 return False
             latest = connection.execute(
-                "SELECT created_at_utc FROM paper_signals ORDER BY created_at_utc DESC LIMIT 1"
+                """
+                SELECT created_at_utc FROM paper_signals
+                WHERE strategy_version = ?
+                ORDER BY created_at_utc DESC LIMIT 1
+                """,
+                (self.strategy_version,),
             ).fetchone()
         if latest is None:
             return True
@@ -213,7 +225,12 @@ class SignalTracker:
         resolved = 0
         with self._connect() as connection:
             active = connection.execute(
-                "SELECT * FROM paper_signals WHERE status = 'active' ORDER BY created_at_utc"
+                """
+                SELECT * FROM paper_signals
+                WHERE status = 'active' AND strategy_version = ?
+                ORDER BY created_at_utc
+                """,
+                (self.strategy_version,),
             ).fetchall()
             for signal in active:
                 after = signal["last_checked_candle_utc"] or signal["signal_candle_at_utc"]
@@ -289,11 +306,19 @@ class SignalTracker:
         with self._connect() as connection:
             rows = dict(
                 connection.execute(
-                    "SELECT status, COUNT(*) AS count FROM paper_signals GROUP BY status"
+                    """
+                    SELECT status, COUNT(*) AS count FROM paper_signals
+                    WHERE strategy_version = ? GROUP BY status
+                    """,
+                    (self.strategy_version,),
                 ).fetchall()
             )
             total_r = connection.execute(
-                "SELECT COALESCE(SUM(result_r), 0) FROM paper_signals"
+                """
+                SELECT COALESCE(SUM(result_r), 0) FROM paper_signals
+                WHERE strategy_version = ?
+                """,
+                (self.strategy_version,),
             ).fetchone()[0]
         wins = int(rows.get("win", 0))
         losses = int(rows.get("loss", 0))

@@ -100,6 +100,18 @@ def test_active_signal_blocks_another(tmp_path):
     assert tracker.can_create(now=candle + timedelta(hours=1)) is False
 
 
+def test_strategy_versions_have_isolated_limits_and_statistics(tmp_path):
+    path = tmp_path / "signals.db"
+    old_tracker = SignalTracker(path, strategy_version="v1")
+    current_tracker = SignalTracker(path, strategy_version="v5")
+    candle = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    old_tracker.create_signal(_reading(), candle, candle)
+
+    assert old_tracker.stats().total == 1
+    assert current_tracker.stats().total == 0
+    assert current_tracker.can_create(now=candle + timedelta(minutes=5)) is True
+
+
 def test_footer_is_appended_when_database_is_configured(tmp_path, monkeypatch):
     path = tmp_path / "signals.db"
     SignalTracker(path)
