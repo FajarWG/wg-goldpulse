@@ -84,10 +84,23 @@ class SignalTracker:
                     exit_price REAL,
                     result_r REAL,
                     ambiguous INTEGER NOT NULL DEFAULT 0,
-                    context_json TEXT NOT NULL DEFAULT '{}'
+                    context_json TEXT NOT NULL DEFAULT '{}',
+                    regime TEXT,
+                    bias_source TEXT,
+                    hysteresis TEXT
                 )
                 """
             )
+            # Migration for databases created before the regime columns existed.
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(paper_signals)").fetchall()
+            }
+            for name in ("regime", "bias_source", "hysteresis"):
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE paper_signals ADD COLUMN {name} TEXT"
+                    )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_signals_status ON paper_signals(status)"
             )
@@ -158,8 +171,9 @@ class SignalTracker:
                 """
                 INSERT OR IGNORE INTO paper_signals (
                     id, strategy_version, created_at_utc, signal_candle_at_utc,
-                    direction, entry, stop_loss, take_profit, score, status, context_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                    direction, entry, stop_loss, take_profit, score, status, context_json,
+                    regime, bias_source, hysteresis
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
                 """,
                 (
                     signal_id,
@@ -172,6 +186,9 @@ class SignalTracker:
                     float(reading.take_profit),
                     int(reading.confluence_score),
                     json.dumps(context, ensure_ascii=False),
+                    getattr(reading, "regime", None),
+                    getattr(reading, "bias_source", None),
+                    getattr(reading, "hysteresis", None),
                 ),
             )
         return signal_id if cursor.rowcount == 1 else None

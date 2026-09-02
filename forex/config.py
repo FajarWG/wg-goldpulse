@@ -232,11 +232,15 @@ class Config:
 
     def describe(self) -> str:
         """Human-readable summary of which optional features are active."""
+        if self.llm.enabled:
+            llm_status = f"manual (opt-in via --ai / button; provider {self.llm.model})"
+        else:
+            llm_status = "off (no API key)"
         lines = [
             f"symbols: {', '.join(self.symbols) if self.symbols else '(default watchlist)'}",
             f"timeframes: {', '.join(self.timeframes)}",
             f"provider preference: {self.preferred_provider or '(automatic fallback)'}",
-            f"LLM commentary: {'on (' + self.llm.model + ')' if self.llm.enabled else 'off (no API key)'}",
+            f"LLM commentary: {llm_status}",
             f"Telegram push: {'on' if self.telegram.enabled else 'off (no bot token/chat id)'}",
             f"output: {self.output_dir} ({self.report_format})",
         ]

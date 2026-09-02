@@ -6,11 +6,20 @@ No broker, account, position sizing, or order execution code belongs here.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+from .analysis import (
+    candle_patterns,
+    composite_vote,
+    hysteresis,
+    support_resistance_clusters,
+    volatility_regime,
+)
+from .analysis import rsi as rsi_series
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,12 @@ class SMCReading:
     candle_pattern: Optional[str]
     reasons: List[str]
     cautions: List[str]
+    regime: str = "normal"  # "high_vol" | "normal" | "unknown"
+    bias_source: str = "alignment"  # "alignment" | "voting" | "unavailable"
+    hysteresis: str = "off"  # Schmitt state over recent M5 scores
+    volume_confirm: Optional[bool] = None
+    composite: Dict[str, Any] = field(default_factory=dict)
+    sr_levels: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -181,20 +196,47 @@ def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading
     fvg = recent_fvg(m5, atr)
     pattern = candle_pattern(m5)
 
+    # Vibe-Trading style overlay: volatility regime, composite vote and a
+    # hysteresis dead-band over the M5 RSI series.
+    regime = volatility_regime(m5["close"])
+    composite = composite_vote(m5)
+    m5_rsi_series = rsi_series(m5["close"], 14)
+    if len(m5_rsi_series.dropna()) >= 2:
+        hysteresis_state = hysteresis(m5_rsi_series, enter=70.0, exit=30.0)
+    else:
+        hysteresis_state = "off"
+
+    sr_levels: List[Dict[str, Any]] = []
+    if len(m5) >= 30:
+        sr_levels = support_resistance_clusters(m5, window=5, tolerance_frac=0.002)
+
     long_score = 0
     short_score = 0
     long_reasons: List[str] = []
     short_reasons: List[str] = []
     cautions: List[str] = []
 
+    bias_source = "unavailable"
     if macro_bias == "up":
         long_score += 25
         long_reasons.append("H1/H4/D1 macro bias bullish")
+        bias_source = "alignment"
     elif macro_bias == "down":
         short_score += 25
         short_reasons.append("H1/H4/D1 macro bias bearish")
+        bias_source = "alignment"
     else:
         cautions.append(f"macro bias {macro_bias or 'unavailable'}; directional signal blocked")
+
+    composite_direction = composite.get("vote", "neutral")
+    if composite_direction in ("long", "short"):
+        if composite_direction == "long":
+            long_score += 15
+            long_reasons.append("M5 composite vote long (trend/momentum/volume)")
+        else:
+            short_score += 15
+            short_reasons.append("M5 composite vote short (trend/momentum/volume)")
+        bias_source = "voting"
 
     if m15_structure.direction == "bullish":
         long_score += 25
@@ -238,13 +280,30 @@ def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading
         short_score += 5
         short_reasons.append(f"M5 RSI overbought ({rsi:.1f})")
 
+    direction = "long" if long_score >= short_score else "short"
+    volume_confirm = composite.get("volume_confirm")
+    if volume_confirm is True and direction == "long":
+        long_score += 5
+        long_reasons.append("M5 volume confirms upside")
+    elif volume_confirm is False and direction == "short":
+        short_score += 5
+        short_reasons.append("M5 volume confirms downside")
+
+    score = max(long_score, short_score)
+    if regime == "high_vol":
+        cautions.append("high-volatility regime; new directional signals are blocked")
+
     action = "WAIT"
     reasons: List[str] = []
-    score = max(long_score, short_score)
-    direction = "long" if long_score > short_score else "short"
     macro_allows = (direction == "long" and macro_bias == "up") or (direction == "short" and macro_bias == "down")
     structure_allows = m15_structure.direction == ("bullish" if direction == "long" else "bearish")
-    if score >= 65 and macro_allows and structure_allows and long_score != short_score:
+    if (
+        score >= 65
+        and macro_allows
+        and structure_allows
+        and long_score != short_score
+        and regime != "high_vol"
+    ):
         action = direction.upper()
         reasons = long_reasons if direction == "long" else short_reasons
     else:
@@ -287,4 +346,10 @@ def evaluate(m5: pd.DataFrame, m15: pd.DataFrame, macro_bias: str) -> SMCReading
         candle_pattern=pattern,
         reasons=reasons,
         cautions=cautions,
+        regime=regime,
+        bias_source=bias_source,
+        hysteresis=hysteresis_state,
+        volume_confirm=volume_confirm,
+        composite=composite,
+        sr_levels=sr_levels,
     )

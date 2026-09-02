@@ -16,8 +16,10 @@ from tests.helpers import StubProvider
 
 CLI_ENV_VARS = (
     "FOREX_SYMBOLS", "FOREX_TIMEFRAMES", "FOREX_BARS", "FOREX_PROVIDER",
-    "FOREX_OUTPUT_DIR", "FOREX_REPORT_FORMAT", "LLM_API_KEY", "OPENAI_API_KEY",
-    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "FOREX_OUTPUT_DIR", "FOREX_REPORT_FORMAT", "LLM_API_KEY", "LLM_MODEL",
+    "LLM_BASE_URL", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+    "GROQ_API_KEY", "GEMINI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "AI_PROVIDER_ORDER", "GROQ_MODEL", "GEMINI_MODEL", "DEEPSEEK_MODEL",
 )
 
 
@@ -27,6 +29,14 @@ def isolate_env(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FOREX_OUTPUT_DIR", str(tmp_path / "out"))
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    """Add GROQ/GEMINI/DEEPSEEK to the vars stripped by isolate_env."""
+    for name in ("GROQ_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "AI_PROVIDER_ORDER"):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
 
 
 @pytest.fixture
@@ -79,6 +89,15 @@ class TestCheckMode:
     def test_check_reports_llm_off_without_key(self, capsys):
         main(["--check"])
         assert "LLM commentary: off" in capsys.readouterr().out
+
+    def test_check_reports_llm_manual_with_key(self, clean_env, capsys):
+        clean_env.setenv("GROQ_API_KEY", "sk-test")
+        main(["--check"])
+        assert "manual (opt-in" in capsys.readouterr().out
+
+    def test_ai_flag_parses(self):
+        assert build_parser().parse_args(["--ai"]).ai is True
+        assert build_parser().parse_args([]).ai is False
 
 
 class TestInvalidInput:

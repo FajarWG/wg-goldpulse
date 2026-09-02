@@ -22,9 +22,9 @@ Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus d
 - Signal LONG/SHORT/WAIT dengan entry, batas salah/SL, dan target referensi.
 - Telegram commands dan inline buttons untuk statistik, backtest, bantuan, Ambil, dan Lewati.
 - Forward validation otomatis: menang, kalah, expired, win rate, dan akumulasi R.
-- Historical replay V1–V4 dengan cache data UTC, versioned output, drawdown, dan profit factor.
+- Historical replay V1–V4 dengan cache data UTC, versioned output, drawdown, profit factor, p-value Monte Carlo, dan breakdown regime.
 - Dual Twelve Data API key, quota accounting, failover, throttling, dan retry.
-- AI explanation opsional dengan fallback Groq → Gemini → DeepSeek.
+- AI explanation **on-demand** (fallback Groq → Gemini → DeepSeek): tidak pernah otomatis. Dipicu manual via `python main.py --ai`, tombol "AI Analisis" di desktop, atau `/ai`/tombol 🤖 di Telegram.
 - systemd services/timers untuk market analysis, signal checks, Telegram listener, dan weekly backtest.
 
 ## Quick start lokal
@@ -42,6 +42,7 @@ Isi `.env` secara lokal. Jangan commit API key atau token.
 
 ```bash
 python main.py --symbols XAUUSD --timeframes H1,H4,D1 --stdout
+python main.py --symbols XAUUSD --ai --stdout   # tambahkan penjelasan AI (manual)
 python signal_main.py
 python backtest_main.py --strategy all
 python telegram_bot_main.py

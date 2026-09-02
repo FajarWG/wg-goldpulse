@@ -21,6 +21,7 @@ def stats_keyboard() -> Dict[str, Any]:
     return {
         "inline_keyboard": [
             [
+                {"text": "🤖 Analisis AI", "callback_data": "ai"},
                 {"text": "📊 Statistik", "callback_data": "stats"},
                 {"text": "🧪 Backtest", "callback_data": "backtest"},
             ],

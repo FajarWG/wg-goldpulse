@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from .analysis import align_timeframes, analyse_timeframe
@@ -35,6 +36,10 @@ class BacktestTrade:
     result: str
     result_r: float
     ambiguous: bool
+    regime: str = "normal"
+    bias_source: str = "alignment"
+    hysteresis: str = "off"
+    volume_confirm: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,9 @@ class BacktestSummary:
     profit_factor: Optional[float]
     max_drawdown_r: float
     max_candidate_score: int
+    warmup_bars: int = 0
+    monte_carlo_p_value: Optional[float] = None
+    regime_breakdown: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -219,6 +227,30 @@ def _strategy_time_allows(timestamp: pd.Timestamp, strategy_version: str) -> boo
     return first_hour <= utc_hour <= last_hour
 
 
+def monte_carlo_pvalue(
+    trades: List[BacktestTrade],
+    iterations: int = 500,
+    seed: int = 42,
+) -> Optional[float]:
+    """Permutation-test p-value: how often shuffled trade order beats the actual.
+
+    The observed total-R is compared against total-R from randomly shuffled
+    trade sequences (Monte Carlo). A low p-value means the sequence is unlikely
+    to be pure luck. Returns None when there are too few trades to permute.
+    """
+    if len(trades) < 8:
+        return None
+    results = np.array([float(t.result_r) for t in trades], dtype=float)
+    observed = float(results.sum())
+    rng = np.random.default_rng(seed)
+    beats = 0
+    for _ in range(iterations):
+        shuffled = rng.permutation(results)
+        if float(shuffled.sum()) >= observed:
+            beats += 1
+    return round((beats + 1) / (iterations + 1), 3)
+
+
 def run_backtest(
     frames: Dict[str, pd.DataFrame],
     strategy_version: str = "v1",
@@ -237,6 +269,8 @@ def run_backtest(
     next_allowed: Optional[pd.Timestamp] = None
     evaluations = 0
     max_score = 0
+    warmup_bars = 500
+    regime_counts: Dict[str, int] = {}
     if strategy_version == "v4":
         reward_r = 0.5
     elif strategy_version in ("v2", "v3", "v3.1"):
@@ -302,8 +336,13 @@ def run_backtest(
                 result=result,
                 result_r=result_r,
                 ambiguous=ambiguous,
+                regime=reading.regime,
+                bias_source=reading.bias_source,
+                hysteresis=reading.hysteresis,
+                volume_confirm=reading.volume_confirm,
             )
         )
+        regime_counts[reading.regime] = regime_counts.get(reading.regime, 0) + 1
         daily_counts[day] = daily_counts.get(day, 0) + 1
         next_allowed = max(opened_at + timedelta(minutes=cooldown_minutes), closed_at)
 
@@ -335,6 +374,9 @@ def run_backtest(
         profit_factor=(sum(max(trade.result_r, 0) for trade in trades) / losses) if losses else None,
         max_drawdown_r=round(max_drawdown, 2),
         max_candidate_score=max_score,
+        warmup_bars=warmup_bars,
+        monte_carlo_p_value=monte_carlo_pvalue(trades),
+        regime_breakdown=regime_counts,
     )
     return summary, trades
 
@@ -357,6 +399,10 @@ def save_backtest(
 def format_backtest(summary: BacktestSummary) -> str:
     win_rate = "Belum tersedia" if summary.win_rate is None else f"{summary.win_rate:.1f}%"
     factor = "—" if summary.profit_factor is None else f"{summary.profit_factor:.2f}"
+    p_value = "—" if summary.monte_carlo_p_value is None else f"{summary.monte_carlo_p_value:.3f}"
+    regime_text = ", ".join(
+        f"{key}: {count}" for key, count in sorted(summary.regime_breakdown.items())
+    ) or "—"
     return "\n".join(
         [
             "🧪 WG GOLDPULSE — HISTORICAL BACKTEST",
@@ -374,6 +420,8 @@ def format_backtest(summary: BacktestSummary) -> str:
             f"📈 Total: {summary.total_r:+.1f}R",
             f"📉 Max drawdown: {summary.max_drawdown_r:.1f}R",
             f"⚖️ Profit factor: {factor}",
+            f"🎲 P-value (Monte Carlo): {p_value}",
+            f"🌡️ Regime: {regime_text}",
             f"🔎 Skor kandidat tertinggi: {summary.max_candidate_score}/100",
             "━━━━━━━━━━━━━━━━",
             "Hasil historis bukan jaminan performa berikutnya.",

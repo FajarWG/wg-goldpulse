@@ -3,17 +3,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 
 from forex.config import Config, TelegramConfig
 from forex.notify import send_telegram, stats_keyboard
 from forex.backtest import format_backtest, format_comparison, load_latest_summary
+from forex.llm import generate_commentary
 from forex.product import BOT_DESCRIPTION, BOT_SHORT_DESCRIPTION, bot_name
 from forex.tracking import SignalTracker, format_stats_footer
 from forex.usage import tracker_from_env
@@ -69,8 +71,11 @@ def _help_text() -> str:
             "/status — rekap signal forward test",
             "/backtest — hasil historical backtest terakhir",
             "/usage — pemakaian Twelve Data",
-            "/ai — status AI dan urutan fallback",
+            "/ai — minta analisis AI untuk hasil terakhir (manual)",
             "/help — bantuan ini",
+            "",
+            "AI hanya dipicu manual lewat /ai atau tombol 🤖 Analisis AI — "
+            "tidak pernah otomatis di notifikasi harian.",
             "",
             "Saat signal READY, gunakan tombol Ambil atau Lewati. Hasil signal tetap dinilai otomatis.",
         ]
@@ -109,14 +114,46 @@ def _usage_text() -> str:
     )
 
 
+def _load_latest_payload() -> Optional[Dict[str, Any]]:
+    """Read the latest computed analysis state written by the pipeline."""
+    path = os.getenv("FOREX_STATE_PATH", "").strip()
+    if not path:
+        state_dir = Path(os.getenv("FOREX_STATE_DIR", "/var/lib/xauusd-analysis"))
+        path = str(state_dir / "latest.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _ai_text() -> str:
-    candidates = Config.from_env().llm.candidates_from_env()
-    if not candidates:
-        return "🤖 AI belum dikonfigurasi. Analisis deterministik tetap berjalan."
-    lines = ["🤖 AI EXPLANATION", "━━━━━━━━━━━━━━━━", "Urutan fallback:"]
-    lines.extend(f"{index}. {item.provider.title()} · {item.model}" for index, item in enumerate(candidates, 1))
-    lines.extend(["━━━━━━━━━━━━━━━━", "AI hanya menjelaskan hasil; tidak mengubah signal, skor, SL, atau TP."])
-    return "\n".join(lines)
+    """Generate AI commentary over the latest computed payload (on demand)."""
+    config = Config.from_env()
+    if not config.llm.enabled:
+        return (
+            "🤖 AI belum dikonfigurasi (tidak ada API key). "
+            "Analisis deterministik tetap berjalan; AI hanya on-demand."
+        )
+    payload = _load_latest_payload()
+    if not payload or not payload.get("pairs"):
+        return (
+            "Belum ada hasil analisis untuk dijelaskan. "
+            "Jalankan `python main.py` dulu (analisis terjadwal otomatis), "
+            "lalu minta AI lagi."
+        )
+    try:
+        commentary = generate_commentary(payload, config.llm)
+    except Exception as exc:
+        logger.warning("AI commentary failed (%s)", type(exc).__name__)
+        return "🤖 Gagal menghasilkan analisis AI. Coba lagi nanti."
+    if not commentary:
+        return "🤖 Penyedia AI tidak membalas. Coba lagi nanti."
+    provider = ""
+    candidates = config.llm.candidates_from_env()
+    if candidates:
+        provider = f"\n_(sumber: {candidates[0].provider} · {candidates[0].model})_"
+    return f"🤖 ANALISIS AI (XAUUSD & pasangan){provider}\n\n{commentary}"
 
 
 def _send_command(command: str, config: TelegramConfig, tracker: SignalTracker) -> None:
@@ -154,6 +191,10 @@ def handle_callback(
         return
 
     data = str(query.get("data", ""))
+    if data == "ai":
+        _answer(config, callback_id, "Menghasilkan analisis AI…")
+        send_telegram(_ai_text(), config)
+        return
     if data == "stats":
         _answer(config, callback_id, "Statistik diperbarui")
         send_telegram(format_stats_footer(tracker.stats()), config)
@@ -215,7 +256,7 @@ def main() -> int:
                     {"command": "status", "description": "Rekap signal dan win rate"},
                     {"command": "backtest", "description": "Historical backtest terakhir"},
                     {"command": "usage", "description": "Pemakaian Twelve Data"},
-                    {"command": "ai", "description": "Status AI explanation"},
+                    {"command": "ai", "description": "Minta analisis AI hasil terakhir (manual)"},
                     {"command": "help", "description": "Cara memakai bot"},
                 ]
             },

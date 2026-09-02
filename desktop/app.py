@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from forex.config import Config
-from forex.pipeline import ProviderManager, resolve_instruments, run
+from forex.pipeline import ProviderManager, add_ai_commentary, resolve_instruments, run
 from forex.report import render
 from desktop.chart import ChartWidget
 
@@ -30,15 +30,42 @@ class AnalysisWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, config: Config, dry_run: bool = False):
+    def __init__(self, config: Config, dry_run: bool = False, generate: bool = False):
         super().__init__()
         self.config = config
         self.dry_run = dry_run
+        self.generate = generate
 
     def run(self) -> None:
         try:
-            result = run(self.config, dry_run=self.dry_run, push=False)
+            result = run(
+                self.config,
+                dry_run=self.dry_run,
+                push=False,
+                generate=self.generate,
+            )
             self.finished.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class AIWorker(QThread):
+    """Generate AI commentary over the last computed payload (on demand)."""
+
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, payload: dict, config: Config, report_format: str):
+        super().__init__()
+        self.payload = payload
+        self.config = config
+        self.report_format = report_format
+
+    def run(self) -> None:
+        try:
+            payload = add_ai_commentary(self.payload, self.config)
+            text = render(payload, self.report_format)
+            self.finished.emit({"payload": payload, "report": text})
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -69,7 +96,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("daily_forex_analysis — Desktop")
         self.resize(1100, 750)
         self._worker: Optional[AnalysisWorker] = None
+        self._ai_worker: Optional[AIWorker] = None
         self._last_result: Optional[dict] = None
+        self._last_config: Optional[Config] = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -94,13 +123,25 @@ class MainWindow(QMainWindow):
         self.bars_spin.setValue(300)
         top.addWidget(self.bars_spin)
 
-        self.dry_check = QCheckBox("Dry run (no LLM / file)")
+        self.dry_check = QCheckBox("Dry run (no file / no notify)")
         self.dry_check.setChecked(True)
+        self.dry_check.setToolTip(
+            "Dry run: analisis saja tanpa menulis file atau notifikasi.\n"
+            "AI tidak pernah otomatis — gunakan tombol 'AI Analisis'."
+        )
         top.addWidget(self.dry_check)
 
         self.run_btn = QPushButton("Run Analysis")
         self.run_btn.clicked.connect(self._on_run)
         top.addWidget(self.run_btn)
+
+        self.ai_btn = QPushButton("AI Analisis")
+        self.ai_btn.setToolTip(
+            "Generate penjelasan AI untuk analisis terakhir (manual, tidak otomatis)."
+        )
+        self.ai_btn.clicked.connect(self._on_ai)
+        self.ai_btn.setEnabled(False)
+        top.addWidget(self.ai_btn)
 
         self.export_btn = QPushButton("Export…")
         self.export_btn.clicked.connect(self._on_export)
@@ -210,10 +251,12 @@ class MainWindow(QMainWindow):
         dry = self.dry_check.isChecked()
 
         self.run_btn.setEnabled(False)
+        self.ai_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self.statusBar().showMessage("Running analysis…")
 
-        self._worker = AnalysisWorker(cfg, dry_run=dry)
+        self._last_config = cfg
+        self._worker = AnalysisWorker(cfg, dry_run=dry, generate=False)
         self._worker.finished.connect(self._on_result)
         self._worker.error.connect(self._on_error)
         self._worker.start()
@@ -231,9 +274,58 @@ class MainWindow(QMainWindow):
             f"({summary['failed']} failed)"
         )
 
+        llm_ready = bool(
+            self._last_config and self._last_config.llm.enabled and payload.get("pairs")
+        )
+        self.ai_btn.setEnabled(llm_ready)
+
         self._populate_table(payload)
         self._populate_symbol_list(payload)
         self.report_view.setPlainText(result["report"])
+
+    def _on_ai(self) -> None:
+        if self._ai_worker and self._ai_worker.isRunning():
+            QMessageBox.warning(self, "Busy", "AI commentary is already generating.")
+            return
+        if not self._last_result or not self._last_config:
+            QMessageBox.information(self, "AI Analisis", "Jalankan analisis dulu.")
+            return
+        payload = self._last_result["payload"]
+        if payload.get("commentary"):
+            QMessageBox.information(
+                self, "AI Analisis", "Analisis AI untuk hasil ini sudah ada."
+            )
+            return
+        if not self._last_config.llm.enabled:
+            QMessageBox.warning(
+                self,
+                "AI Analisis",
+                "Tidak ada API key LLM. Set LLM_API_KEY / GROQ_API_KEY / GEMINI_API_KEY "
+                "di .env lalu restart aplikasi.",
+            )
+            return
+
+        self.ai_btn.setEnabled(False)
+        self.statusBar().showMessage("Menghasilkan analisis AI…")
+
+        self._ai_worker = AIWorker(
+            payload, self._last_config, self._last_config.report_format
+        )
+        self._ai_worker.finished.connect(self._on_ai_result)
+        self._ai_worker.error.connect(self._on_ai_error)
+        self._ai_worker.start()
+
+    def _on_ai_result(self, result: dict) -> None:
+        self._last_result = result
+        self._last_result["payload"] = result["payload"]
+        self.ai_btn.setEnabled(False)
+        self.statusBar().showMessage("Analisis AI selesai")
+        self.report_view.setPlainText(result["report"])
+
+    def _on_ai_error(self, msg: str) -> None:
+        self.ai_btn.setEnabled(True)
+        self.statusBar().showMessage("Analisis AI gagal")
+        QMessageBox.warning(self, "AI Analisis", f"Gagal: {msg}")
 
     def _on_error(self, msg: str) -> None:
         self.run_btn.setEnabled(True)

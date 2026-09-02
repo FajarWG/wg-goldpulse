@@ -13,7 +13,13 @@ import pytest
 
 from forex.config import Config, LLMConfig, TelegramConfig
 from forex.instruments import parse_symbol
-from forex.pipeline import build_payload, resolve_instruments, run, write_report
+from forex.pipeline import (
+    add_ai_commentary,
+    build_payload,
+    resolve_instruments,
+    run,
+    write_report,
+)
 from forex.providers import ProviderManager
 from forex.report import render, render_markdown, telegram_summary
 
@@ -179,7 +185,7 @@ class TestReportRendering:
     def test_markdown_notes_absent_commentary(self, offline_config, stub_manager):
         payload = build_payload(offline_config, manager=stub_manager)
         payload["commentary"] = None
-        assert "commentary disabled or unavailable" in render_markdown(payload)
+        assert "AI commentary tidak diminta" in render_markdown(payload)
 
     def test_markdown_includes_commentary_when_present(self, offline_config, stub_manager):
         payload = build_payload(offline_config, manager=stub_manager)
@@ -285,6 +291,67 @@ class TestRunPipeline:
         assert os.path.isdir(offline_config.output_dir)
 
 
+class TestAIOnDemand:
+    def test_default_run_does_not_call_llm(self, offline_config, stub_manager, monkeypatch):
+        """AI is opt-in: a normal run with a key configured must not call the LLM."""
+        offline_config.llm = LLMConfig(api_key="sk-test")
+
+        def explode(*args, **kwargs):
+            raise AssertionError("LLM must not be called unless generate=True")
+
+        monkeypatch.setattr("forex.pipeline.generate_commentary", explode)
+        result = run(offline_config, dry_run=False, push=False, manager=stub_manager)
+        assert result["payload"]["commentary"] is None
+        assert "Daily Forex Analysis" in result["report"]
+
+    def test_generate_true_calls_llm(self, offline_config, stub_manager, monkeypatch):
+        offline_config.llm = LLMConfig(api_key="sk-test")
+        monkeypatch.setattr(
+            "forex.pipeline.generate_commentary",
+            lambda *a, **k: "Pasar emas dalam uptrend H4.",
+        )
+        result = run(
+            offline_config,
+            dry_run=False,
+            push=False,
+            manager=stub_manager,
+            generate=True,
+        )
+        assert result["payload"]["commentary"] == "Pasar emas dalam uptrend H4."
+
+    def test_dry_run_ignores_generate(self, offline_config, stub_manager, monkeypatch):
+        offline_config.llm = LLMConfig(api_key="sk-test")
+
+        def explode(*args, **kwargs):
+            raise AssertionError("LLM must not be called during a dry run")
+
+        monkeypatch.setattr("forex.pipeline.generate_commentary", explode)
+        result = run(
+            offline_config,
+            dry_run=True,
+            push=False,
+            manager=stub_manager,
+            generate=True,
+        )
+        assert result["payload"]["commentary"] is None
+
+    def test_add_ai_commentary_helper(self, offline_config, stub_manager, monkeypatch):
+        offline_config.llm = LLMConfig(api_key="sk-test")
+        payload = build_payload(offline_config, manager=stub_manager)
+        captured = {}
+
+        def fake_generate(payload, config, metadata=None):
+            if metadata is not None:
+                metadata.update({"enabled": True, "provider": "test"})
+            return "Ringkasan on-demand"
+
+        monkeypatch.setattr("forex.pipeline.generate_commentary", fake_generate)
+        updated = add_ai_commentary(payload, offline_config)
+        assert updated["commentary"] == "Ringkasan on-demand"
+        assert updated["ai"]["enabled"] is True
+        assert updated["ai"]["provider"] == "test"
+
+
 class TestNotifyGuards:
     def test_disabled_telegram_returns_false(self):
         from forex.notify import send_telegram
@@ -334,7 +401,8 @@ class TestNotifyGuards:
         monkeypatch.setenv("SIGNAL_TRACKING_DB", str(tmp_path / "signals.db"))
         monkeypatch.setitem(__import__("sys").modules, "requests", FakeRequests)
         assert notify_module.send_telegram("hi", TelegramConfig(bot_token="t", chat_id="1"))
-        assert captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "stats"
+        assert captured["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ai"
+        assert captured["reply_markup"]["inline_keyboard"][0][1]["callback_data"] == "stats"
 
 
 class TestLLMGuards:

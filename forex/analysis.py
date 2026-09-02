@@ -120,6 +120,197 @@ def donchian(df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
     )
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Wilder's ADX (directional strength), 0-100.
+
+    ``>= 25`` conventionally marks a trending market; below that the market is
+    ranging and directional reads carry less weight.
+    """
+    up_move = df["high"].diff()
+    down_move = -df["low"].diff()
+    plus_dm = pd.Series(
+        np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+        index=df.index,
+    )
+    minus_dm = pd.Series(
+        np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+        index=df.index,
+    )
+    tr = true_range(df)
+    atr_smooth = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+    plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr_smooth
+    minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / atr_smooth
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    return dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
+
+
+def obv(df: pd.DataFrame) -> pd.Series:
+    """On-balance volume. Flat when volume is constant or absent."""
+    if "volume" not in df.columns:
+        return pd.Series(0.0, index=df.index)
+    direction = np.sign(df["close"].diff()).fillna(0.0)
+    return (direction * df["volume"].fillna(0.0)).cumsum()
+
+
+def volume_ratio(df: pd.DataFrame, period: int = 20) -> Optional[float]:
+    """Latest volume vs its trailing mean; None when volume is unusable."""
+    if "volume" not in df.columns:
+        return None
+    volume = df["volume"].astype(float)
+    baseline = volume.rolling(window=period, min_periods=period).mean()
+    ratio = (volume / baseline).dropna()
+    if ratio.empty:
+        return None
+    return float(ratio.iloc[-1])
+
+
+def volatility_regime(close: pd.Series, short: int = 20, long: int = 252) -> str:
+    """Classify recent volatility vs the longer baseline.
+
+    Mirrors the Vibe-Trading bull/bear/high-vol classifier on the volatility
+    axis alone: short-window realised vol above 1.5x the long-window mean marks
+    a high-volatility regime. Returns ``"high_vol"``, ``"normal"`` or
+    ``"unknown"`` when there is not enough history.
+    """
+    if len(close) < long + 1:
+        if len(close) < short + 2:
+            return "unknown"
+        long = max(short + 1, len(close) // 2)
+    returns = close.pct_change(fill_method=None).dropna()
+    if len(returns) < long + 1:
+        return "unknown"
+    short_vol = float(returns.tail(short).std(ddof=0))
+    long_vol = float(returns.tail(long).std(ddof=0))
+    if not np.isfinite(short_vol) or not np.isfinite(long_vol) or long_vol <= 0:
+        return "unknown"
+    return "high_vol" if short_vol > 1.5 * long_vol else "normal"
+
+
+def hysteresis(values: pd.Series, enter: float = 0.65, exit: float = 0.45) -> str:
+    """Schmitt-trigger state over a bounded scalar series.
+
+    The state flips to ``"on"`` only above ``enter`` and back to ``"off"`` only
+    below ``exit``. The dead band between the two thresholds suppresses the
+    whipsaw a single threshold would cause around a noisy boundary.
+    """
+    state = False
+    for value in values.dropna().tolist():
+        if state:
+            if value < exit:
+                state = False
+        elif value > enter:
+            state = True
+    return "on" if state else "off"
+
+
+def candle_patterns(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """Detect common candlestick patterns on the last candle.
+
+    Returns a list of ``{"pattern", "direction"}`` dicts where direction is +1
+    for bullish patterns, -1 for bearish and 0 for neutral. Mirrors the
+    vectorised pattern family in Vibe-Trading: engulfing, harami, piercing
+    line, dark cloud cover, doji, hammer, inverted hammer, shooting star,
+    spinning top.
+    """
+    if len(df) < 2:
+        return []
+    current = df.iloc[-1]
+    previous = df.iloc[-2]
+    open_, high, low, close = (float(current[c]) for c in ("open", "high", "low", "close"))
+    p_open, p_high, p_low, p_close = (float(previous[c]) for c in ("open", "high", "low", "close"))
+
+    body = abs(close - open_)
+    total_range = high - low
+    if body <= 0 or total_range <= 0:
+        return []
+
+    upper_wick = high - max(open_, close)
+    lower_wick = min(open_, close) - low
+    real_body = body / total_range
+    range_fraction = body / (p_high - p_low) if p_high > p_low else 0.0
+    previous_bullish = p_close > p_open
+    current_bullish = close > open_
+
+    patterns: List[Dict[str, Any]] = []
+
+    def _add(name: str, direction: int) -> None:
+        patterns.append({"pattern": name, "direction": direction})
+
+    if current_bullish and not previous_bullish and close >= p_open and open_ <= p_close:
+        _add("bullish_engulfing", +1)
+    elif not current_bullish and previous_bullish and close <= p_open and open_ >= p_close:
+        _add("bearish_engulfing", -1)
+
+    if current_bullish and previous_bullish and open_ >= p_close and close <= p_open:
+        _add("bearish_harami", -1)
+    elif not current_bullish and not previous_bullish and open_ <= p_close and close >= p_open:
+        _add("bullish_harami", +1)
+
+    if current_bullish and not previous_bullish and open_ < p_close and close > (p_open + p_close) / 2:
+        _add("bullish_piercing", +1)
+    if not current_bullish and previous_bullish and open_ > p_close and close < (p_open + p_close) / 2:
+        _add("bearish_dark_cloud", -1)
+
+    if real_body < 0.10:
+        _add("doji", 0)
+    elif lower_wick >= body * 2 and upper_wick <= body:
+        _add("hammer", +1)
+    elif lower_wick <= body and upper_wick >= body * 2:
+        _add("shooting_star", -1)
+    elif lower_wick >= body * 2 and upper_wick >= body * 2:
+        _add("spinning_top", 0)
+    elif body > 0 and range_fraction >= 0.6:
+        _add("marubozu", +1 if current_bullish else -1)
+
+    return patterns
+
+
+def support_resistance_clusters(
+    df: pd.DataFrame,
+    window: int = 5,
+    tolerance_frac: float = 0.01,
+    max_levels: int = 6,
+) -> List[Dict[str, Any]]:
+    """Cluster swing highs/lows into support and resistance levels.
+
+    Swing points are found with a centred rolling window (Vibe-Trading's
+    ``window=5`` geometry default). Points within ``tolerance_frac`` of each
+    other merge into a cluster whose strength is the number of touches; the
+    strongest clusters become the reported levels.
+    """
+    if len(df) < window * 2 + 1:
+        return []
+    highs = df["high"].astype(float)
+    lows = df["low"].astype(float)
+    span = float(df["high"].tail(200).max() - df["low"].tail(200).min())
+    if not np.isfinite(span) or span <= 0:
+        return []
+    tolerance = max(span * tolerance_frac, float(df["close"].iloc[-1]) * 0.0001)
+
+    def _extrema(values: pd.Series, is_high: bool) -> List[float]:
+        flat = values.reset_index(drop=True)
+        rolling = flat.rolling(window * 2 + 1, center=True)
+        extreme = rolling.max() if is_high else rolling.min()
+        matches = flat.eq(extreme) & extreme.notna()
+        return [float(flat.iloc[i]) for i in flat.index[matches]]
+
+    points = _extrema(highs, True) + _extrema(lows, False)
+    clusters: List[List[float]] = []
+    for point in points:
+        for cluster in clusters:
+            if abs(point - cluster[0]) <= tolerance:
+                cluster.append(point)
+                break
+        else:
+            clusters.append([point])
+    ranked = sorted(
+        ({"level": float(np.mean(c)), "strength": len(c)} for c in clusters),
+        key=lambda item: item["strength"],
+        reverse=True,
+    )
+    return ranked[:max_levels]
+
+
 def _last_float(series: pd.Series) -> Optional[float]:
     """Last non-NaN value as a plain float, or None if the series is empty/NaN."""
     clean = series.dropna()
@@ -137,6 +328,8 @@ class TrendRead:
     slow_ma: Optional[float]
     separation_pips: Optional[float]
     note: str
+    adx: Optional[float] = None
+    regime: str = "unknown"  # "high_vol" | "normal" | "unknown"
 
 
 @dataclass
@@ -145,6 +338,10 @@ class MomentumRead:
     macd_histogram: Optional[float]
     state: str  # "overbought" | "oversold" | "neutral"
     note: str
+    bollinger_position: Optional[float] = None  # 0.0 at lower band, 1.0 at upper
+    volume_ratio: Optional[float] = None
+    volume_confirm: Optional[bool] = None  # volume agrees with close direction
+    candle: Optional[Dict[str, Any]] = None  # {"pattern", "direction"}
 
 
 @dataclass
@@ -153,6 +350,7 @@ class VolatilityRead:
     atr_percentile: Optional[float]
     regime: str  # "expanding" | "contracting" | "normal" | "unknown"
     note: str
+    hysteresis: str = "off"  # Schmitt state of ATR percentile: "on" | "off"
 
 
 @dataclass
@@ -162,6 +360,7 @@ class LevelsRead:
     range_pips: Optional[float]
     position_in_range: Optional[float]  # 0.0 at the low, 1.0 at the high
     note: str
+    clusters: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -177,9 +376,16 @@ class TimeframeAnalysis:
     volatility: VolatilityRead
     levels: LevelsRead
     warnings: List[str] = field(default_factory=list)
+    composite: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         """Flatten for JSON output and LLM prompting."""
+        candle = None
+        if self.momentum.candle is not None:
+            candle = {
+                "pattern": self.momentum.candle["pattern"],
+                "direction": self.momentum.candle["direction"],
+            }
         return {
             "timeframe": self.timeframe,
             "candles": self.candles,
@@ -190,18 +396,25 @@ class TimeframeAnalysis:
                 "fast_ma": self.trend.fast_ma,
                 "slow_ma": self.trend.slow_ma,
                 "separation_pips": self.trend.separation_pips,
+                "adx": self.trend.adx,
+                "regime": self.trend.regime,
                 "note": self.trend.note,
             },
             "momentum": {
                 "rsi": self.momentum.rsi,
                 "macd_histogram": self.momentum.macd_histogram,
                 "state": self.momentum.state,
+                "bollinger_position": self.momentum.bollinger_position,
+                "volume_ratio": self.momentum.volume_ratio,
+                "volume_confirm": self.momentum.volume_confirm,
+                "candle": candle,
                 "note": self.momentum.note,
             },
             "volatility": {
                 "atr_pips": self.volatility.atr_pips,
                 "atr_percentile": self.volatility.atr_percentile,
                 "regime": self.volatility.regime,
+                "hysteresis": self.volatility.hysteresis,
                 "note": self.volatility.note,
             },
             "levels": {
@@ -209,8 +422,10 @@ class TimeframeAnalysis:
                 "recent_low": self.levels.recent_low,
                 "range_pips": self.levels.range_pips,
                 "position_in_range": self.levels.position_in_range,
+                "clusters": self.levels.clusters,
                 "note": self.levels.note,
             },
+            "composite": self.composite,
             "warnings": list(self.warnings),
         }
 
@@ -253,7 +468,95 @@ def _analyse_trend(
         direction = "down"
         note = f"fast EMA below slow EMA by {abs(separation):.1f} pips"
 
-    return TrendRead(direction, _round(fast_ma, 6), _round(slow_ma, 6), _round(separation, 1), note)
+    adx_value = _last_float(adx(df))
+    regime = volatility_regime(df["close"])
+    if adx_value is not None:
+        note += f"; ADX {adx_value:.1f}"
+        if adx_value >= 25:
+            note += " (trending)"
+        else:
+            note += " (ranging)"
+
+    return TrendRead(
+        direction,
+        _round(fast_ma, 6),
+        _round(slow_ma, 6),
+        _round(separation, 1),
+        note,
+        adx=_round(adx_value, 1),
+        regime=regime,
+    )
+
+
+def composite_vote(df: pd.DataFrame) -> Dict[str, Any]:
+    """Three-dimensional voting read adapted from Vibe-Trading.
+
+    Dimensions:
+    - trend: EMA 12/26 ordering, kept only when ADX(14) >= 25
+    - mean_reversion: Bollinger(20,2) position and RSI(14) extremes
+    - volume: OBV slope over 20 bars, kept only when volume data is usable
+
+    The vote is ``"long"``, ``"short"`` or ``"neutral"``; volume confirmation
+    is deliberately conservative (``False``) when the series carries constant or
+    flat volume, which prevents synthetic or sparse data from generating false
+    confirmations.
+    """
+    if len(df) < 2:
+        return {"trend": "neutral", "mean_reversion": "neutral", "volume": "neutral", "vote": "neutral"}
+    close = df["close"]
+    fast = ema(close, 12)
+    slow = ema(close, 26)
+    last_fast = _last_float(fast)
+    last_slow = _last_float(slow)
+    strength = _last_float(adx(df, 14))
+
+    trend = "neutral"
+    if last_fast is not None and last_slow is not None and strength is not None:
+        if strength >= 25 and abs(last_fast - last_slow) > 0:
+            trend = "long" if last_fast > last_slow else "short"
+
+    bands = bollinger(close, 20, 2.0).dropna()
+    rsi_value = _last_float(rsi(close, 14))
+    mean_reversion = "neutral"
+    if not bands.empty and rsi_value is not None:
+        row = bands.iloc[-1]
+        width = row["upper"] - row["lower"]
+        if width > 0 and row["middle"] == row["middle"]:
+            position = float((row["middle"] - row["lower"]) / width)
+            if rsi_value >= 65 or position >= 0.8:
+                mean_reversion = "short"
+            elif rsi_value <= 35 or position <= 0.2:
+                mean_reversion = "long"
+
+    volume = "neutral"
+    volume_confirm = None
+    volume_ratio_value = None
+    if "volume" in df.columns and df["volume"].astype(float).nunique() > 1:
+        volume_ratio_value = volume_ratio(df, 20)
+        obv_series = obv(df)
+        if len(obv_series.dropna()) >= 25:
+            slope = float(obv_series.iloc[-1]) - float(obv_series.iloc[-25])
+            if slope > 0:
+                volume = "long"
+            elif slope < 0:
+                volume = "short"
+            if volume != "neutral":
+                volume_confirm = volume == trend if trend != "neutral" else None
+
+    sides = [d for d in (trend, mean_reversion, volume) if d != "neutral"]
+    vote = "neutral"
+    if sides:
+        vote = max(set(sides), key=sides.count)
+        if sides.count(vote) == 1:
+            vote = "neutral"
+    return {
+        "trend": trend,
+        "mean_reversion": mean_reversion,
+        "volume": volume,
+        "vote": vote,
+        "volume_confirm": volume_confirm,
+        "volume_ratio": round(volume_ratio_value, 2) if volume_ratio_value is not None else None,
+    }
 
 
 def _analyse_momentum(df: pd.DataFrame, rsi_period: int) -> MomentumRead:
@@ -272,7 +575,52 @@ def _analyse_momentum(df: pd.DataFrame, rsi_period: int) -> MomentumRead:
     if hist is not None:
         note += f"; MACD histogram {'positive' if hist > 0 else 'negative'}"
 
-    return MomentumRead(_round(rsi_value, 1), _round(hist, 6), state, note)
+    bands = bollinger(df["close"], 20, 2.0).dropna()
+    bollinger_position = None
+    if not bands.empty:
+        row = bands.iloc[-1]
+        width = row["upper"] - row["lower"]
+        if width > 0:
+            bollinger_position = _round(float((row["middle"] - row["lower"]) / width), 3)
+            if bollinger_position is not None:
+                note += (
+                    f"; price at {bollinger_position:.0%} of the Bollinger band"
+                )
+
+    volume_ratio_value = volume_ratio(df, 20)
+    volume_confirm = None
+    if volume_ratio_value is not None and "volume" in df.columns:
+        volume_series = df["volume"].astype(float)
+        if volume_series.nunique() > 1 and len(df) >= 25:
+            obv_series = obv(df)
+            slope = float(obv_series.iloc[-1]) - float(obv_series.iloc[-25])
+            if slope > 0:
+                volume_confirm = True
+            elif slope < 0:
+                volume_confirm = False
+            if volume_confirm is not None:
+                note += "; volume supports the move" if volume_confirm else "; volume fading the move"
+
+    candle = None
+    detected = candle_patterns(df)
+    if detected:
+        candle = detected[0]
+        pattern_label = candle["pattern"].replace("_", " ")
+        if candle["direction"] > 0:
+            note += f"; {pattern_label} formed on the last candle"
+        elif candle["direction"] < 0:
+            note += f"; {pattern_label} formed on the last candle"
+
+    return MomentumRead(
+        _round(rsi_value, 1),
+        _round(hist, 6),
+        state,
+        note,
+        bollinger_position=bollinger_position,
+        volume_ratio=_round(volume_ratio_value, 2),
+        volume_confirm=volume_confirm,
+        candle=candle,
+    )
 
 
 def _analyse_volatility(
@@ -306,7 +654,21 @@ def _analyse_volatility(
     elif regime == "expanding":
         note += "; wide ranges imply wider stops are needed"
 
-    return VolatilityRead(_round(atr_pips, 1), _round(percentile, 0), regime, note)
+    hysteresis_state = "off"
+    if percentile is not None and len(atr_series) >= 60:
+        # Rolling 20-bar percentile of ATR, then a Schmitt trigger on it.
+        percentile_series = atr_series.rolling(20, min_periods=20).apply(
+            lambda window: float((window <= window.iloc[-1]).mean()), raw=False
+        )
+        hysteresis_state = hysteresis(percentile_series, enter=0.75, exit=0.25)
+
+    return VolatilityRead(
+        _round(atr_pips, 1),
+        _round(percentile, 0),
+        regime,
+        note,
+        hysteresis=hysteresis_state,
+    )
 
 
 def _analyse_levels(
@@ -337,8 +699,13 @@ def _analyse_levels(
     else:
         note = f"price mid-range ({range_pips:.0f} pips wide)"
 
+    clusters: List[Dict[str, Any]] = []
+    if len(df) >= 30:
+        clusters = support_resistance_clusters(df)
+
     return LevelsRead(
-        _round(high, 6), _round(low, 6), _round(range_pips, 1), _round(position, 3), note
+        _round(high, 6), _round(low, 6), _round(range_pips, 1), _round(position, 3), note,
+        clusters=clusters,
     )
 
 
@@ -372,6 +739,10 @@ def analyse_timeframe(
     last_close = float(df["close"].iloc[-1])
     change_pips = instrument.pips(last_close - float(df["close"].iloc[-2]))
 
+    composite: Dict[str, Any] = {}
+    if len(df) >= 30:
+        composite = composite_vote(df)
+
     return TimeframeAnalysis(
         timeframe=timeframe,
         candles=len(df),
@@ -382,6 +753,7 @@ def analyse_timeframe(
         volatility=_analyse_volatility(df, instrument, atr_period),
         levels=_analyse_levels(df, instrument, level_period),
         warnings=warnings,
+        composite=composite,
     )
 
 

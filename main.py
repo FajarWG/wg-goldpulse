@@ -4,7 +4,8 @@
 Examples:
     python main.py                            # default watchlist, keyless provider
     python main.py --symbols EURUSD,USDJPY    # pick your pairs
-    python main.py --dry-run                  # no LLM call, no file write
+    python main.py --dry-run                  # no file write, no notification
+    python main.py --ai                       # add AI commentary for this run only
     python main.py --check                    # show configuration and exit
     python main.py --format json              # machine-readable output
 """
@@ -45,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Analyse and print only: no LLM call, no file written, no notification.",
     )
     parser.add_argument("--no-push", action="store_true", help="Skip notifications.")
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="Generate AI commentary for this run. Off by default: scheduled runs "
+        "never call the LLM. Use the Telegram button or this flag to request it.",
+    )
     parser.add_argument("--stdout", action="store_true", help="Print the report to stdout.")
     parser.add_argument(
         "--check",
@@ -131,7 +138,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Symbol error: {exc}", file=sys.stderr)
         return 2
 
-    result = run(config, dry_run=args.dry_run, push=not args.no_push)
+    result = run(
+        config,
+        dry_run=args.dry_run,
+        push=not args.no_push,
+        generate=args.ai,
+    )
     payload = result["payload"]
     summary = payload["summary"]
 

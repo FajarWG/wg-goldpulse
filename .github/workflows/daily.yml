@@ -35,6 +35,8 @@ jobs:
         env:
           # All optional. Add them as repository secrets to enable each feature;
           # missing secrets simply disable that capability.
+          # AI commentary is opt-in (--ai / Telegram button); this scheduled run
+          # intentionally does NOT pass --ai, so no LLM call happens here.
           FOREX_SYMBOLS: ${{ github.event.inputs.symbols }}
           TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
           TWELVEDATA_API_KEY2: ${{ secrets.TWELVEDATA_API_KEY2 }}

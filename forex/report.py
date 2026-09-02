@@ -125,7 +125,9 @@ def render_markdown(payload: Dict[str, Any]) -> str:
         lines.extend([
             "## Analyst commentary",
             "",
-            "_LLM commentary disabled or unavailable — showing computed analysis only._",
+            "_AI commentary tidak diminta atau tidak tersedia — "
+            "menampilkan analisis deterministik saja. AI bersifat opt-in "
+            "(`python main.py --ai`, tombol desktop, atau /ai di Telegram)._",
             "",
         ])
 
@@ -236,7 +238,10 @@ def render_html(payload: Dict[str, Any]) -> str:
     if commentary:
         commentary_html = f'<div class="commentary"><h2>Analyst Commentary</h2><p>{commentary}</p></div>'
     else:
-        commentary_html = '<div class="commentary muted"><em>LLM commentary disabled or unavailable.</em></div>'
+        commentary_html = (
+            '<div class="commentary muted"><em>AI commentary tidak diminta atau '
+            'tidak tersedia — AI bersifat opt-in.</em></div>'
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="en">

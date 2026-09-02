@@ -5,11 +5,13 @@ import pandas as pd
 
 from forex.backtest import (
     BacktestSummary,
+    BacktestTrade,
     _resolve_trade,
     _strategy_allows,
     _strategy_time_allows,
     format_backtest,
     load_latest_summary,
+    monte_carlo_pvalue,
     save_backtest,
 )
 from forex.smc import SMCReading
@@ -137,3 +139,62 @@ def test_v4_uses_only_07utc_clean_structure_setups():
     assert _strategy_allows(_reading(score=75), at_7, "v4") is False
     assert _strategy_allows(_reading(), pd.Timestamp("2026-01-01T08:00:00Z"), "v4") is False
     assert _strategy_time_allows(at_7, "v4") is True
+
+
+def test_backtest_summary_format_shows_new_fields(tmp_path):
+    summary = BacktestSummary(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        strategy_version="v1",
+        period_start="2026-01-01T00:00:00+00:00",
+        period_end="2026-01-31T00:00:00+00:00",
+        m5_candles=5000,
+        evaluations=4500,
+        signals=10,
+        wins=6,
+        losses=4,
+        expired=0,
+        win_rate=60.0,
+        total_r=8.0,
+        profit_factor=2.0,
+        max_drawdown_r=1.5,
+        max_candidate_score=80,
+        warmup_bars=500,
+        monte_carlo_p_value=0.02,
+        regime_breakdown={"normal": 8, "high_vol": 2},
+    )
+    text = format_backtest(summary)
+    assert "P-value (Monte Carlo): 0.020" in text
+    assert "Regime: high_vol: 2, normal: 8" in text
+
+
+def test_monte_carlo_pvalue_deterministic_and_bounded():
+    trades = [
+        BacktestTrade(
+            opened_at="2026-01-01T00:00:00+00:00",
+            closed_at="2026-01-01T01:00:00+00:00",
+            direction="LONG",
+            entry=100.0,
+            stop_loss=99.0,
+            take_profit=102.0,
+            score=70,
+            macro_bias="up",
+            m15_structure="bullish",
+            m5_structure="bullish",
+            rsi=50.0,
+            liquidity_event=None,
+            fvg=None,
+            candle_pattern=None,
+            result="win" if i % 2 == 0 else "loss",
+            result_r=2.0 if i % 2 == 0 else -1.0,
+            ambiguous=False,
+        )
+        for i in range(12)
+    ]
+    first = monte_carlo_pvalue(trades, iterations=100)
+    second = monte_carlo_pvalue(trades, iterations=100)
+    assert first == second  # seeded -> deterministic
+    assert 0.0 <= first <= 1.0
+
+
+def test_monte_carlo_pvalue_none_for_few_trades():
+    assert monte_carlo_pvalue([]) is None

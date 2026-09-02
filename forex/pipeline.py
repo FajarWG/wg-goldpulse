@@ -140,32 +140,50 @@ def write_report(text: str, config: Config, fmt: Optional[str] = None) -> str:
     return os.path.abspath(path)
 
 
+def add_ai_commentary(payload: Dict[str, Any], config: Config) -> Dict[str, Any]:
+    """Generate LLM commentary over an existing payload (no re-fetch).
+
+    The payload is mutated in place and returned so callers can chain:
+    ``payload = add_ai_commentary(payload, config)``. Used by the CLI ``--ai``
+    flag, the desktop "AI Analisis" button and the Telegram bot — the LLM is
+    never called automatically.
+    """
+    ai_metadata: Dict[str, Any] = {}
+    payload["commentary"] = generate_commentary(payload, config.llm, metadata=ai_metadata)
+    payload["ai"] = ai_metadata
+    return payload
+
+
 def run(
     config: Config,
     dry_run: bool = False,
     push: bool = True,
     manager: Optional[ProviderManager] = None,
+    generate: bool = False,
 ) -> Dict[str, Any]:
     """Execute the full pipeline.
 
     Args:
         config: Runtime configuration.
-        dry_run: Skip the LLM call, file write and notifications.
+        dry_run: Skip file writes and notifications.
         push: Send notifications when channels are configured.
         manager: Injected provider manager (used by tests).
+        generate: Request AI commentary over the computed analysis. The LLM is
+            opt-in only; scheduled runs never set this.
 
     Returns:
         A result dict with the payload, rendered text, output path and push status.
     """
     payload = build_payload(config, manager=manager)
 
-    if not dry_run:
-        ai_metadata: Dict[str, Any] = {}
-        payload["commentary"] = generate_commentary(payload, config.llm, metadata=ai_metadata)
-        payload["ai"] = ai_metadata
+    if generate and not dry_run:
+        payload = add_ai_commentary(payload, config)
         write_state(payload)
     else:
         payload["commentary"] = None
+        payload["ai"] = {}
+        if not dry_run:
+            write_state(payload)
 
     text = report_module.render(payload, config.report_format)
 

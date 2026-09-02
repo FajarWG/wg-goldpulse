@@ -12,16 +12,22 @@ import pytest
 
 from forex.analysis import (
     InsufficientDataError,
+    adx,
     align_timeframes,
     analyse_timeframe,
     atr,
     bollinger,
+    candle_patterns,
+    composite_vote,
     donchian,
     ema,
+    hysteresis,
     macd,
     rsi,
     sma,
+    support_resistance_clusters,
     true_range,
+    volatility_regime,
 )
 from forex.instruments import parse_symbol
 
@@ -211,3 +217,121 @@ class TestAlignTimeframes:
 
     def test_note_always_present(self, uptrend):
         assert align_timeframes({"H1": self._read(uptrend, "H1")})["note"]
+
+
+def _rising_volume_candles(n=200, drift=0.0005, start=1.1):
+    """Synthetic OHLC with monotonically rising volume (for volume tests)."""
+    df = make_candles(n=n, drift=drift, start=start, noise=0.0002)
+    df["volume"] = np.linspace(500.0, 5000.0, n)
+    return df
+
+
+class TestADX:
+    def test_adx_bounded_and_finite(self):
+        value = adx(make_candles(n=300, drift=0.0005, noise=0.0001)).dropna().iloc[-1]
+        assert 0.0 <= value <= 100.0
+
+    def test_adx_higher_in_strong_trend(self):
+        trending = adx(make_candles(n=300, drift=0.001, noise=0.00005)).dropna().iloc[-1]
+        choppy = adx(make_candles(n=300, drift=0.0, noise=0.0005)).dropna().iloc[-1]
+        assert trending > choppy
+
+    def test_trend_read_carries_adx(self, uptrend):
+        read = analyse_timeframe(uptrend, EURUSD, "H1")
+        assert read.trend.adx is not None
+
+
+class TestVolatilityRegime:
+    def test_short_history_unknown(self):
+        assert volatility_regime(make_candles(n=5)["close"]) == "unknown"
+
+    def test_normal_series_is_normal(self):
+        assert volatility_regime(make_candles(n=400, noise=0.0005)["close"]) == "normal"
+
+    def test_volatility_shock_is_high_vol(self):
+        rng = np.random.default_rng(0)
+        close = make_candles(n=300, noise=0.0001)["close"]
+        shocked_tail = close.iloc[-40:].values * (1 + rng.normal(0, 0.004, 40))
+        tail = pd.Series(shocked_tail, index=close.index[-40:])
+        shocked = pd.concat([close.iloc[:-40], tail])
+        assert volatility_regime(shocked) == "high_vol"
+
+
+class TestHysteresis:
+    def test_enters_above_threshold_and_stays(self):
+        series = pd.Series([0.2, 0.3, 0.7, 0.6, 0.5, 0.5])
+        # Once above 0.65 it latches on; 0.5 is still above the 0.45 exit.
+        assert hysteresis(series, enter=0.65, exit=0.45) == "on"
+
+    def test_turns_off_below_exit(self):
+        series = pd.Series([0.8, 0.5, 0.4])
+        assert hysteresis(series, enter=0.65, exit=0.45) == "off"
+
+    def test_dead_band_prevents_flapping(self):
+        noisy = pd.Series([0.5, 0.55, 0.5, 0.6, 0.5, 0.58])
+        assert hysteresis(noisy, enter=0.65, exit=0.45) == "off"
+
+
+class TestCandlePatterns:
+    def test_engulfing_detected(self):
+        df = pd.DataFrame(
+            {
+                "open": [1.10, 1.09],
+                "high": [1.11, 1.13],
+                "low": [1.09, 1.085],
+                "close": [1.095, 1.125],
+            }
+        )
+        names = {p["pattern"] for p in candle_patterns(df)}
+        assert "bullish_engulfing" in names
+
+    def test_doji_detected(self):
+        df = pd.DataFrame(
+            {
+                "open": [1.10, 1.10],
+                "high": [1.11, 1.105],
+                "low": [1.09, 1.095],
+                "close": [1.095, 1.1005],
+            }
+        )
+        names = {p["pattern"] for p in candle_patterns(df)}
+        assert "doji" in names
+
+    def test_empty_on_single_candle(self):
+        assert candle_patterns(make_candles(n=1)) == []
+
+
+class TestSupportResistanceClusters:
+    def test_returns_list_of_levels(self):
+        df = make_candles(n=300, noise=0.0008)
+        levels = support_resistance_clusters(df)
+        assert isinstance(levels, list)
+        assert all("level" in item and "strength" in item for item in levels)
+
+    def test_near_flat_series_gives_levels_inside_price_range(self):
+        df = make_candles(n=100, drift=0.0, noise=0.000001)
+        levels = support_resistance_clusters(df)
+        assert isinstance(levels, list)
+        if levels:
+            low, high = float(df["low"].min()), float(df["high"].max())
+            assert all(low <= item["level"] <= high for item in levels)
+
+
+class TestCompositeVote:
+    def test_uptrend_votes_long(self, uptrend):
+        vote = composite_vote(uptrend)
+        assert vote["trend"] == "long"
+
+    def test_flat_volume_never_confirms(self, flat):
+        """Constant volume must not fabricate a volume confirmation."""
+        vote = composite_vote(flat)
+        assert vote["volume_confirm"] is None
+
+    def test_rising_volume_in_uptrend_confirms(self):
+        df = _rising_volume_candles()
+        vote = composite_vote(df)
+        assert vote["volume_confirm"] is True
+
+    def test_composite_included_in_read(self, uptrend):
+        read = analyse_timeframe(uptrend, EURUSD, "H1")
+        assert read.composite.get("vote") in {"long", "short", "neutral"}
