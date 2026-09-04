@@ -229,7 +229,7 @@ class SignalTracker:
                     float(reading.entry),
                     float(reading.stop_loss),
                     float(reading.take_profit),
-                    int(reading.confluence_score),
+                    int(reading.score if signal_type == "momentum" else reading.confluence_score),
                     json.dumps(context, ensure_ascii=False),
                     getattr(reading, "regime", None),
                     getattr(reading, "bias_source", None),

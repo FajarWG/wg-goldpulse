@@ -73,10 +73,16 @@ def _backtest_text() -> str:
     state_dir = Path(os.getenv("FOREX_STATE_DIR", "/var/lib/xauusd-analysis"))
     root = state_dir / "backtest"
     current = load_latest_summary(root / CURRENT_STRATEGY_VERSION / "latest.json")
-    current = current or load_latest_summary(root / "latest.json")
-    if current is None:
-        return "🧪 Backtest belum tersedia. Backtest otomatis dijalankan setiap Sabtu setelah pasar tutup."
-    return format_backtest(current)
+    fallback = load_latest_summary(root / "latest.json")
+    if current is None and fallback is not None and fallback.strategy_version == CURRENT_STRATEGY_VERSION:
+        current = fallback
+    momentum = load_latest_summary(root / "momentum_v1" / "latest.json")
+    sections = []
+    for label, summary in ((f"Analisis Full · {CURRENT_STRATEGY_VERSION}", current),
+                           ("Momentum Candle · momentum_v1", momentum)):
+        sections.append(label + "\n" + (format_backtest(summary) if summary else
+                        "Backtest versi ini belum tersedia. Jadwal otomatis: Sabtu setelah pasar tutup."))
+    return "\n\n".join(sections)
 
 
 def _usage_text() -> str:

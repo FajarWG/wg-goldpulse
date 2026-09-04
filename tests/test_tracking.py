@@ -136,3 +136,19 @@ def test_state_round_trip(tmp_path):
     assert tracker.get_state("offset") is None
     tracker.set_state("offset", "42")
     assert tracker.get_state("offset") == "42"
+
+
+def test_momentum_score_and_type_are_stored_independently(tmp_path):
+    from types import SimpleNamespace
+
+    tracker = SignalTracker(tmp_path / "signals.db")
+    candle = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    payload = _reading().to_dict()
+    payload["score"] = payload.pop("confluence_score")
+    momentum = SimpleNamespace(**payload, to_dict=lambda: payload)
+    assert tracker.create_signal(_reading(), candle, candle, signal_type="full")
+    assert tracker.can_create(now=candle, signal_type="momentum")
+    assert tracker.create_signal(momentum, candle, candle, signal_type="momentum")
+    assert tracker.stats_by_type("full").active == 1
+    assert tracker.stats_by_type("momentum").active == 1
+    assert not tracker.can_create(now=candle, signal_type="momentum")
