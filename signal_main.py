@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""One-shot XAUUSD signal confirmation run for a five-minute systemd timer."""
+"""One-shot XAUUSD signal confirmation run for a five-minute systemd timer.
+
+Emits two independent signal types:
+  - Full analysis (SMC confluence, max 5/day)
+  - Momentum candle (candle-action only, max 5/day)
+Each type has its own cooldown and daily cap.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from forex.instruments import parse_symbol
 from forex.notify import send_telegram, signal_keyboard
 from forex.product import bot_name
 from forex.providers import TwelveDataProvider, resample
-from forex.smc import SMCReading, evaluate
+from forex.smc import MomentumReading, SMCReading, evaluate, momentum_candle
 from forex.tracking import SignalTracker
 
 
@@ -92,6 +98,7 @@ def _telegram_text(reading: SMCReading, generated_at: Optional[datetime] = None)
     }[reading.volume_confirm]
     lines = [
         f"🥇 {bot_name().upper()} — SIGNAL SIAP {action_label}",
+        "📋 Tipe: Analisis Full",
         f"Waktu: {generated_at:%Y-%m-%d %H:%M} UTC",
         "━━━━━━━━━━━━━━━━━━━━",
         "",
@@ -128,6 +135,61 @@ def _telegram_text(reading: SMCReading, generated_at: Optional[datetime] = None)
     return "\n".join(lines)
 
 
+def _momentum_text(reading: MomentumReading, generated_at: Optional[datetime] = None) -> str:
+    generated_at = generated_at or datetime.now(timezone.utc)
+    action_label = {"LONG": "BUY", "SHORT": "SELL"}.get(reading.action, reading.action)
+    regime_label = {
+        "normal": "normal",
+        "high_vol": "volatilitas tinggi",
+        "unknown": "belum diketahui",
+    }.get(reading.regime, reading.regime)
+    pattern_label = None
+    if reading.candle_pattern:
+        pattern_label = reading.candle_pattern[0] if isinstance(reading.candle_pattern, tuple) else reading.candle_pattern
+        pattern_label = str(pattern_label).replace("_", " ").title() if pattern_label else None
+    lines = [
+        f"🥇 {bot_name().upper()} — MOMENTUM {action_label}",
+        "📋 Tipe: Momentum Candle",
+        f"Waktu: {generated_at:%Y-%m-%d %H:%M} UTC",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "📍 RENCANA HARGA",
+    ]
+    if reading.action in ("LONG", "SHORT"):
+        lines.extend([
+            f"Entry referensi: {reading.entry:.2f}",
+            f"Stop loss: {reading.stop_loss:.2f}",
+            f"Take profit: {reading.take_profit:.2f}",
+            f"Risk/reward: 1:{reading.risk_reward:.1f}",
+        ])
+    lines.extend([
+        "",
+        "🔎 KONFIRMASI",
+        f"Skor momentum: {reading.score}/100",
+        f"RSI M5: {reading.rsi:.1f}",
+        f"Body candle: {reading.m5_body_ratio:.0%}",
+        f"Kondisi pasar: {regime_label}",
+    ])
+    if pattern_label:
+        lines.append(f"Pola candle: {pattern_label}")
+    lines.extend([
+        f"EMA searah: {'ya' if reading.ema_aligned else 'tidak'}",
+        f"M15 konfirmasi: {'ya' if reading.m15_aligned else 'tidak'}",
+        f"Volume searah: {'ya' if reading.volume_aligned else 'tidak'}",
+        "",
+        "Skor momentum = kekuatan aksi harga, bukan peluang menang.",
+    ])
+    if reading.reasons:
+        lines.extend(["", "✅ ALASAN SIGNAL", *[f"• {r}" for r in reading.reasons]])
+    if reading.cautions:
+        lines.extend(["", "⚠️ PERHATIAN", *[f"• {c}" for c in reading.cautions]])
+    lines.extend([
+        "",
+        "Bot mencatat hasil sampai TP, SL, atau kedaluwarsa. Tidak ada transaksi otomatis.",
+    ])
+    return "\n".join(lines)
+
+
 def main() -> int:
     config = Config.from_env()
     logging.basicConfig(
@@ -144,35 +206,66 @@ def main() -> int:
     macro_path = Path(os.getenv("FOREX_STATE_PATH", str(state_dir / "latest.json")))
     instrument = parse_symbol("XAUUSD")
     m5 = _drop_open_candle(provider.fetch(instrument, "M5", 500), 5)
+    m15 = resample(m5, "15min")
+
+    # Resolve previous signals
     stats_before = tracker.stats()
     resolved = tracker.evaluate(
         m5,
         timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
     )
     stats_after_evaluation = tracker.stats()
-    m15 = resample(m5, "15min")
-    reading = evaluate(m5, m15, _load_macro(macro_path))
 
     now = datetime.now(timezone.utc)
     event_path = state_dir / "signals" / f"{now.date().isoformat()}.jsonl"
-    send = False
-    tracked_signal_id = None
-    if reading.action in ("LONG", "SHORT") and tracker.can_create(
+    max_full = int(os.getenv("SIGNAL_MAX_FULL_PER_DAY", "5"))
+    max_momentum = int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5"))
+    cooldown = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30"))
+
+    # --- Full analysis signal ---
+    macro_bias = _load_macro(macro_path)
+    full_reading = evaluate(m5, m15, macro_bias)
+    full_created = False
+    full_signal_id = None
+    full_notification = False
+    if full_reading.action in ("LONG", "SHORT") and tracker.can_create(
         now=now,
-        max_per_day=int(os.getenv("SIGNAL_MAX_PER_DAY", "3")),
-        cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "45")),
+        max_per_day=max_full,
+        cooldown_minutes=cooldown,
+        signal_type="full",
     ):
-        tracked_signal_id = tracker.create_signal(reading, m5.index[-1], created_at=now)
-        send = tracked_signal_id is not None
-    notification_sent = False
-    if send and config.telegram.enabled:
-        notification_sent = send_telegram(
-            _telegram_text(reading, now),
+        full_signal_id = tracker.create_signal(full_reading, m5.index[-1], created_at=now, signal_type="full")
+        full_created = full_signal_id is not None
+    if full_created and config.telegram.enabled:
+        full_notification = send_telegram(
+            _telegram_text(full_reading, now),
             config.telegram,
             reply_markup=signal_keyboard(),
         )
+
+    # --- Momentum candle signal ---
+    momentum_reading = momentum_candle(m5, m15)
+    momentum_created = False
+    momentum_signal_id = None
+    momentum_notification = False
+    if momentum_reading.action in ("LONG", "SHORT") and tracker.can_create(
+        now=now,
+        max_per_day=max_momentum,
+        cooldown_minutes=cooldown,
+        signal_type="momentum",
+    ):
+        momentum_signal_id = tracker.create_signal(momentum_reading, m5.index[-1], created_at=now, signal_type="momentum")
+        momentum_created = momentum_signal_id is not None
+    if momentum_created and config.telegram.enabled:
+        momentum_notification = send_telegram(
+            _momentum_text(momentum_reading, now),
+            config.telegram,
+            reply_markup=signal_keyboard(),
+        )
+
+    # --- Result notification ---
     result_notification_sent = False
-    if resolved and not send and config.telegram.enabled:
+    if resolved and not full_created and not momentum_created and config.telegram.enabled:
         changes = []
         won = stats_after_evaluation.wins - stats_before.wins
         lost = stats_after_evaluation.losses - stats_before.losses
@@ -194,28 +287,35 @@ def main() -> int:
             config.telegram,
         )
 
+    # --- Event log ---
     event = {
         "generated_at": now.isoformat(timespec="seconds"),
-        **reading.to_dict(),
-        "tracked_signal_id": tracked_signal_id,
+        "full_analysis": {
+            **full_reading.to_dict(),
+            "signal_id": full_signal_id,
+            "created": full_created,
+            "notification_sent": full_notification,
+        },
+        "momentum_candle": {
+            **momentum_reading.to_dict(),
+            "signal_id": momentum_signal_id,
+            "created": momentum_created,
+            "notification_sent": momentum_notification,
+        },
         "resolved_previous_signals": resolved,
         "tracking_stats": tracker.stats().__dict__,
-        "notification_requested": send,
-        "notification_sent": notification_sent,
         "result_notification_sent": result_notification_sent,
     }
     _append_event(event_path, event)
     _atomic_json(state_dir / "latest_signal.json", event)
 
     logger.info(
-        "action=%s confluence=%s macro=%s m15=%s m5=%s resolved=%s telegram=%s",
-        reading.action,
-        reading.confluence_score,
-        reading.macro_bias,
-        reading.m15_structure,
-        reading.m5_structure,
+        "full=%s(%s) momentum=%s(%s) resolved=%d",
+        full_reading.action,
+        full_reading.confluence_score,
+        momentum_reading.action,
+        momentum_reading.score,
         resolved,
-        "sent" if notification_sent else ("not-triggered" if not send else "failed"),
     )
     return 0
 

@@ -32,6 +32,25 @@ class SignalStats:
         return self.wins / self.completed * 100
 
 
+@dataclass(frozen=True)
+class SignalTypeStats:
+    """Per-type statistics breakdown (full analysis vs momentum candle)."""
+    signal_type: str
+    total: int
+    completed: int
+    wins: int
+    losses: int
+    active: int
+    expired: int
+    total_r: float
+
+    @property
+    def win_rate(self) -> Optional[float]:
+        if self.completed == 0:
+            return None
+        return self.wins / self.completed * 100
+
+
 def _utc(value: Any) -> datetime:
     timestamp = pd.Timestamp(value)
     if timestamp.tzinfo is None:
@@ -94,11 +113,12 @@ class SignalTracker:
                     context_json TEXT NOT NULL DEFAULT '{}',
                     regime TEXT,
                     bias_source TEXT,
-                    hysteresis TEXT
+                    hysteresis TEXT,
+                    signal_type TEXT NOT NULL DEFAULT 'full'
                 )
                 """
             )
-            # Migration for databases created before the regime columns existed.
+            # Migration for databases created before newer columns existed.
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(paper_signals)").fetchall()
@@ -108,6 +128,10 @@ class SignalTracker:
                     connection.execute(
                         f"ALTER TABLE paper_signals ADD COLUMN {name} TEXT"
                     )
+            if "signal_type" not in columns:
+                connection.execute(
+                    "ALTER TABLE paper_signals ADD COLUMN signal_type TEXT NOT NULL DEFAULT 'full'"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_signals_status ON paper_signals(status)"
             )
@@ -136,8 +160,9 @@ class SignalTracker:
     def can_create(
         self,
         now: Optional[datetime] = None,
-        max_per_day: int = 3,
-        cooldown_minutes: int = 45,
+        max_per_day: int = 5,
+        cooldown_minutes: int = 30,
+        signal_type: str = "full",
     ) -> bool:
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
@@ -145,27 +170,27 @@ class SignalTracker:
             if connection.execute(
                 """
                 SELECT 1 FROM paper_signals
-                WHERE status = 'active' AND strategy_version = ? LIMIT 1
+                WHERE status = 'active' AND strategy_version = ? AND signal_type = ? LIMIT 1
                 """,
-                (self.strategy_version,),
+                (self.strategy_version, signal_type),
             ).fetchone():
                 return False
             count = connection.execute(
                 """
                 SELECT COUNT(*) FROM paper_signals
-                WHERE created_at_utc >= ? AND strategy_version = ?
+                WHERE created_at_utc >= ? AND strategy_version = ? AND signal_type = ?
                 """,
-                (_iso(day_start), self.strategy_version),
+                (_iso(day_start), self.strategy_version, signal_type),
             ).fetchone()[0]
             if count >= max_per_day:
                 return False
             latest = connection.execute(
                 """
                 SELECT created_at_utc FROM paper_signals
-                WHERE strategy_version = ?
+                WHERE strategy_version = ? AND signal_type = ?
                 ORDER BY created_at_utc DESC LIMIT 1
                 """,
-                (self.strategy_version,),
+                (self.strategy_version, signal_type),
             ).fetchone()
         if latest is None:
             return True
@@ -176,6 +201,7 @@ class SignalTracker:
         reading: Any,
         candle_at: Any,
         created_at: Optional[datetime] = None,
+        signal_type: str = "full",
     ) -> Optional[str]:
         if reading.action not in ("LONG", "SHORT"):
             return None
@@ -183,7 +209,7 @@ class SignalTracker:
             return None
         created_at = (created_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
         candle = _utc(candle_at)
-        signal_id = f"{self.strategy_version}:{reading.action}:{_iso(candle)}"
+        signal_id = f"{self.strategy_version}:{signal_type}:{reading.action}:{_iso(candle)}"
         context: Dict[str, Any] = reading.to_dict()
         with self._connect() as connection:
             cursor = connection.execute(
@@ -191,8 +217,8 @@ class SignalTracker:
                 INSERT OR IGNORE INTO paper_signals (
                     id, strategy_version, created_at_utc, signal_candle_at_utc,
                     direction, entry, stop_loss, take_profit, score, status, context_json,
-                    regime, bias_source, hysteresis
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                    regime, bias_source, hysteresis, signal_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
                 """,
                 (
                     signal_id,
@@ -208,6 +234,7 @@ class SignalTracker:
                     getattr(reading, "regime", None),
                     getattr(reading, "bias_source", None),
                     getattr(reading, "hysteresis", None),
+                    signal_type,
                 ),
             )
         return signal_id if cursor.rowcount == 1 else None
@@ -334,6 +361,40 @@ class SignalTracker:
             total_r=float(total_r),
         )
 
+    def stats_by_type(self, signal_type: str) -> SignalTypeStats:
+        """Compute statistics filtered by signal_type ('full' or 'momentum')."""
+        with self._connect() as connection:
+            rows = dict(
+                connection.execute(
+                    """
+                    SELECT status, COUNT(*) AS count FROM paper_signals
+                    WHERE strategy_version = ? AND signal_type = ? GROUP BY status
+                    """,
+                    (self.strategy_version, signal_type),
+                ).fetchall()
+            )
+            total_r = connection.execute(
+                """
+                SELECT COALESCE(SUM(result_r), 0) FROM paper_signals
+                WHERE strategy_version = ? AND signal_type = ?
+                """,
+                (self.strategy_version, signal_type),
+            ).fetchone()[0]
+        wins = int(rows.get("win", 0))
+        losses = int(rows.get("loss", 0))
+        active = int(rows.get("active", 0))
+        expired = int(rows.get("expired", 0))
+        return SignalTypeStats(
+            signal_type=signal_type,
+            total=wins + losses + active + expired,
+            completed=wins + losses,
+            wins=wins,
+            losses=losses,
+            active=active,
+            expired=expired,
+            total_r=float(total_r),
+        )
+
     def record_decision(self, signal_id: str, decision: str, chat_id: str) -> str:
         """Record one immutable manual take/skip choice for an active signal."""
         if decision not in ("take", "skip"):
@@ -379,30 +440,47 @@ class SignalTracker:
 
 
 def format_stats_footer(stats: SignalStats) -> str:
-    if stats.win_rate is None:
-        rate = "Belum tersedia"
+    """Render stats with per-type breakdown (full analysis vs momentum)."""
+    lines = [
+        "📊 STATISTIK FORWARD TEST",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"Signal tercatat: {stats.total}",
+        f"Sudah selesai: {stats.completed}",
+        "",
+        "HASIL SELESAI",
+        f"✅ Benar: {stats.wins}",
+        f"❌ Salah: {stats.losses}",
+    ]
+    if stats.completed > 0:
+        lines.append(f"🎯 Win rate: {stats.win_rate:.1f}%")
     else:
-        rate = f"{stats.win_rate:.1f}%"
-    return "\n".join(
-        [
-            "📊 STATISTIK FORWARD TEST",
-            "━━━━━━━━━━━━━━━━━━━━",
-            f"Signal tercatat: {stats.total}",
-            f"Sudah selesai: {stats.completed}",
-            "",
-            "HASIL SELESAI",
-            f"✅ Benar: {stats.wins}",
-            f"❌ Salah: {stats.losses}",
-            f"🎯 Win rate: {rate}",
-            "",
-            "STATUS LAIN",
-            f"⏳ Masih aktif: {stats.active}",
-            f"⌛ Kedaluwarsa: {stats.expired}",
-            f"📈 Akumulasi hasil: {stats.total_r:+.1f}R",
-            "━━━━━━━━━━━━━━━━━━━━",
-            "Win rate hanya menghitung signal yang sudah menyentuh TP atau SL.",
-        ]
-    )
+        lines.append("🎯 Win rate: Belum tersedia")
+    lines.extend([
+        "",
+        "STATUS LAIN",
+        f"⏳ Masih aktif: {stats.active}",
+        f"⌛ Kedaluwarsa: {stats.expired}",
+        f"📈 Akumulasi hasil: {stats.total_r:+.1f}R",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ])
+
+    # Per-type breakdown
+    tracker = SignalTracker.from_env()
+    if tracker is not None:
+        for stype, label in (("full", "Analisis Full"), ("momentum", "Momentum Candle")):
+            ts = tracker.stats_by_type(stype)
+            if ts.total == 0:
+                continue
+            wr = f"{ts.win_rate:.1f}%" if ts.completed > 0 else "—"
+            lines.extend([
+                "",
+                f"📋 {label}",
+                f"Signal: {ts.total} · WR: {wr} · {ts.total_r:+.1f}R",
+            ])
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("Win rate hanya menghitung signal yang sudah menyentuh TP atau SL.")
+    return "\n".join(lines)
 
 
 def append_stats_footer(text: str) -> str:

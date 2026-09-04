@@ -15,7 +15,7 @@ from .analysis import align_timeframes, analyse_timeframe
 from .instruments import parse_symbol
 from .product import CURRENT_STRATEGY_VERSION
 from .providers import TwelveDataProvider, resample
-from .smc import evaluate
+from .smc import evaluate, momentum_candle
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class BacktestTrade:
     bias_source: str = "alignment"
     hysteresis: str = "off"
     volume_confirm: Optional[bool] = None
+    signal_type: str = "full"
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,127 @@ def run_backtest(
     return summary, trades
 
 
+def run_momentum_backtest(
+    frames: Dict[str, pd.DataFrame],
+    timeout_minutes: int = 240,
+    max_per_day: int = 5,
+    cooldown_minutes: int = 30,
+) -> Tuple[BacktestSummary, List[BacktestTrade]]:
+    """Backtest the momentum-candle-only strategy (no macro bias dependency)."""
+    m5 = frames["M5"].copy().sort_index()
+    now = pd.Timestamp.now(tz="UTC")
+    if not m5.empty and m5.index[-1] + timedelta(minutes=5) > now:
+        m5 = m5.iloc[:-1]
+    m15 = resample(m5, "15min")
+    trades: List[BacktestTrade] = []
+    daily_counts: Dict[str, int] = {}
+    next_allowed: Optional[pd.Timestamp] = None
+    evaluations = 0
+    max_score = 0
+    warmup_bars = 500
+    reward_r = 2.0
+    regime_counts: Dict[str, int] = {}
+
+    for index in range(500, len(m5) - 1):
+        timestamp = m5.index[index]
+        if next_allowed is not None and timestamp < next_allowed:
+            continue
+        day = timestamp.tz_convert("UTC").date().isoformat()
+        if daily_counts.get(day, 0) >= max_per_day:
+            continue
+        m5_window = m5.iloc[: index + 1].tail(500)
+        m15_end = int(m15.index.searchsorted(timestamp, side="right"))
+        m15_window = m15.iloc[max(0, m15_end - 200) : m15_end]
+        if len(m15_window) < 20 or len(m5_window) < 35:
+            continue
+        try:
+            reading = momentum_candle(m5_window, m15_window)
+        except ValueError:
+            continue
+        evaluations += 1
+        max_score = max(max_score, reading.score)
+        if reading.action not in ("LONG", "SHORT"):
+            continue
+
+        opened_at = timestamp
+        deadline = opened_at + timedelta(minutes=timeout_minutes)
+        future = m5.iloc[index + 1 :]
+        risk = abs(float(reading.entry) - float(reading.stop_loss))
+        target = (
+            float(reading.entry) + risk * reward_r
+            if reading.action == "LONG"
+            else float(reading.entry) - risk * reward_r
+        )
+        result, result_r, closed_at, ambiguous = _resolve_trade(
+            future,
+            reading.action,
+            float(reading.stop_loss),
+            target,
+            deadline,
+            reward_r=reward_r,
+        )
+        trades.append(
+            BacktestTrade(
+                opened_at=opened_at.isoformat(),
+                closed_at=closed_at.isoformat(),
+                direction=reading.action,
+                entry=float(reading.entry),
+                stop_loss=float(reading.stop_loss),
+                take_profit=target,
+                score=reading.score,
+                macro_bias="N/A",
+                m15_structure="N/A",
+                m5_structure="N/A",
+                rsi=round(reading.rsi, 2),
+                liquidity_event=None,
+                fvg=None,
+                candle_pattern=reading.candle_pattern[0] if isinstance(reading.candle_pattern, tuple) else reading.candle_pattern,
+                result=result,
+                result_r=result_r,
+                ambiguous=ambiguous,
+                regime=reading.regime,
+                signal_type="momentum",
+            )
+        )
+        regime_counts[reading.regime] = regime_counts.get(reading.regime, 0) + 1
+        daily_counts[day] = daily_counts.get(day, 0) + 1
+        next_allowed = max(opened_at + timedelta(minutes=cooldown_minutes), closed_at)
+
+    wins = sum(trade.result == "win" for trade in trades)
+    losses = sum(trade.result == "loss" for trade in trades)
+    expired = sum(trade.result == "expired" for trade in trades)
+    completed = wins + losses
+    total_r = sum(trade.result_r for trade in trades)
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for trade in trades:
+        cumulative += trade.result_r
+        peak = max(peak, cumulative)
+        max_drawdown = max(max_drawdown, peak - cumulative)
+    summary = BacktestSummary(
+        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        strategy_version="momentum_v1",
+        period_start=m5.index[0].isoformat(),
+        period_end=m5.index[-1].isoformat(),
+        m5_candles=len(m5),
+        evaluations=evaluations,
+        signals=len(trades),
+        wins=wins,
+        losses=losses,
+        expired=expired,
+        win_rate=(wins / completed * 100) if completed else None,
+        total_r=round(total_r, 2),
+        profit_factor=(sum(max(trade.result_r, 0) for trade in trades) / losses) if losses else None,
+        max_drawdown_r=round(max_drawdown, 2),
+        max_candidate_score=max_score,
+        warmup_bars=warmup_bars,
+        monte_carlo_p_value=monte_carlo_pvalue(trades),
+        regime_breakdown=regime_counts,
+    )
+    return summary, trades
+
+
 def save_backtest(
     output_dir: Path,
     summary: BacktestSummary,
@@ -416,37 +538,59 @@ def save_backtest(
     return summary_path, trades_path
 
 
-def format_backtest(summary: BacktestSummary) -> str:
+def format_backtest(summary: BacktestSummary, trades: Optional[List[BacktestTrade]] = None) -> str:
     win_rate = "Belum tersedia" if summary.win_rate is None else f"{summary.win_rate:.1f}%"
     factor = "—" if summary.profit_factor is None else f"{summary.profit_factor:.2f}"
     p_value = "—" if summary.monte_carlo_p_value is None else f"{summary.monte_carlo_p_value:.3f}"
     regime_text = ", ".join(
         f"{key}: {count}" for key, count in sorted(summary.regime_breakdown.items())
     ) or "—"
-    return "\n".join(
-        [
-            "🧪 WG GOLDPULSE — HISTORICAL BACKTEST",
-            "━━━━━━━━━━━━━━━━",
-            f"Periode: {summary.period_start[:10]} → {summary.period_end[:10]}",
-            f"Data M5: {summary.m5_candles:,} candle",
-            f"Evaluasi: {summary.evaluations:,}",
-            "",
-            f"Signal: {summary.signals}",
-            f"✅ Menang: {summary.wins}",
-            f"❌ Kalah: {summary.losses}",
-            f"⌛ Kedaluwarsa: {summary.expired}",
-            f"🎯 Win rate: {win_rate}",
-            "",
-            f"📈 Total: {summary.total_r:+.1f}R",
-            f"📉 Max drawdown: {summary.max_drawdown_r:.1f}R",
-            f"⚖️ Profit factor: {factor}",
-            f"🎲 P-value (sign-randomisation): {p_value}",
-            f"🌡️ Regime: {regime_text}",
-            f"🔎 Skor kandidat tertinggi: {summary.max_candidate_score}/100",
-            "━━━━━━━━━━━━━━━━",
-            "Hasil historis bukan jaminan performa berikutnya.",
-        ]
-    )
+    lines = [
+        "🧪 WG GOLDPULSE — HISTORICAL BACKTEST",
+        "━━━━━━━━━━━━━━━━",
+        f"Periode: {summary.period_start[:10]} → {summary.period_end[:10]}",
+        f"Data M5: {summary.m5_candles:,} candle",
+        f"Evaluasi: {summary.evaluations:,}",
+        "",
+        f"Signal: {summary.signals}",
+        f"✅ Menang: {summary.wins}",
+        f"❌ Kalah: {summary.losses}",
+        f"⌛ Kedaluwarsa: {summary.expired}",
+        f"🎯 Win rate: {win_rate}",
+        "",
+        f"📈 Total: {summary.total_r:+.1f}R",
+        f"📉 Max drawdown: {summary.max_drawdown_r:.1f}R",
+        f"⚖️ Profit factor: {factor}",
+        f"🎲 P-value (sign-randomisation): {p_value}",
+        f"🌡️ Regime: {regime_text}",
+        f"🔎 Skor kandidat tertinggi: {summary.max_candidate_score}/100",
+    ]
+
+    # Per-type breakdown when trades are available
+    if trades:
+        full_trades = [t for t in trades if t.signal_type == "full"]
+        momentum_trades = [t for t in trades if t.signal_type == "momentum"]
+        for trade_list, label in [(full_trades, "Analisis Full"), (momentum_trades, "Momentum Candle")]:
+            if not trade_list:
+                continue
+            t_wins = sum(t.result == "win" for t in trade_list)
+            t_losses = sum(t.result == "loss" for t in trade_list)
+            t_expired = sum(t.result == "expired" for t in trade_list)
+            t_completed = t_wins + t_losses
+            t_r = sum(t.result_r for t in trade_list)
+            t_wr = f"{t_wins / t_completed * 100:.1f}%" if t_completed else "—"
+            lines.extend([
+                "",
+                f"📋 {label}",
+                f"Signal: {len(trade_list)} · WR: {t_wr} · {t_r:+.1f}R",
+                f"Menang: {t_wins} · Kalah: {t_losses} · Kedaluwarsa: {t_expired}",
+            ])
+
+    lines.extend([
+        "━━━━━━━━━━━━━━━━",
+        "Hasil historis bukan jaminan performa berikutnya.",
+    ])
+    return "\n".join(lines)
 
 
 def format_comparison(v1: BacktestSummary, v2: BacktestSummary) -> str:

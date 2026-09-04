@@ -13,6 +13,7 @@ from forex.backtest import (
     format_backtest,
     load_backtest_data,
     run_backtest,
+    run_momentum_backtest,
     save_backtest,
 )
 from forex.config import Config
@@ -58,20 +59,34 @@ def main() -> int:
         return 0
     versions = (CURRENT_STRATEGY_VERSION,) if args.strategy == "all" else (args.strategy,)
     results = {}
+    all_trades = {}
     for version in versions:
         summary, trades = run_backtest(
             frames,
             strategy_version=version,
             timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
-            max_per_day=int(os.getenv("SIGNAL_MAX_PER_DAY", "3")),
-            cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "45")),
+            max_per_day=int(os.getenv("SIGNAL_MAX_FULL_PER_DAY", "5")),
+            cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30")),
         )
         label = args.output_label if len(versions) == 1 and args.output_label else version
         save_backtest(backtest_dir / label, summary, trades)
         if version == CURRENT_STRATEGY_VERSION:
             save_backtest(backtest_dir, summary, trades)
         results[version] = summary
-    text = format_backtest(results[CURRENT_STRATEGY_VERSION if args.strategy == "all" else args.strategy])
+        all_trades[version] = trades
+
+    # Momentum candle backtest
+    momentum_summary, momentum_trades = run_momentum_backtest(
+        frames,
+        timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
+        max_per_day=int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5")),
+        cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30")),
+    )
+    save_backtest(backtest_dir / "momentum_v1", momentum_summary, momentum_trades)
+
+    active_version = CURRENT_STRATEGY_VERSION if args.strategy == "all" else args.strategy
+    text = format_backtest(results[active_version], all_trades.get(active_version, []))
+    text += "\n\n" + format_backtest(momentum_summary, momentum_trades)
     print(text)
     print(f"Data fetched: {', '.join(fetched) if fetched else 'none (cache)'}")
     if args.notify and config.telegram.enabled:

@@ -60,6 +60,31 @@ class SMCReading:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class MomentumReading:
+    """Lightweight signal from pure candle-action momentum scoring."""
+    action: str
+    score: int
+    price: float
+    entry: Optional[float]
+    stop_loss: Optional[float]
+    take_profit: Optional[float]
+    risk_reward: float
+    rsi: float
+    atr: float
+    candle_pattern: Optional[str]
+    m5_body_ratio: float
+    ema_aligned: bool
+    m15_aligned: bool
+    volume_aligned: bool
+    regime: str
+    reasons: List[str]
+    cautions: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 def _swings(frame: pd.DataFrame, lookback: int = 3) -> Tuple[List[Tuple[int, float]], List[Tuple[int, float]]]:
     window = lookback * 2 + 1
     high_values = frame["high"].astype(float).reset_index(drop=True)
@@ -362,4 +387,178 @@ def evaluate(
         volume_confirm=volume_confirm,
         composite=composite,
         sr_levels=sr_levels,
+    )
+
+
+def _candle_body_ratio(candle: pd.Series) -> float:
+    """Body / total-range ratio of a single candle. 1.0 = full-body marubozu."""
+    total = float(candle["high"]) - float(candle["low"])
+    if total <= 0:
+        return 0.0
+    body = abs(float(candle["close"]) - float(candle["open"]))
+    return body / total
+
+
+def momentum_candle(
+    m5: pd.DataFrame,
+    m15: pd.DataFrame,
+    score_threshold: int = 50,
+) -> MomentumReading:
+    """Lightweight momentum signal based on candle action — no macro bias needed.
+
+    Scoring breakdown (max 100):
+      M5 candle body ratio ≥ 0.6        +30
+      M5 candle directional body size    +15
+      RSI extreme (≤35 / ≥65)           +20
+      EMA 12/26 alignment                +20
+      M15 structure alignment            +15
+
+    Threshold defaults to 50 (lower than the full SMC 65).
+    """
+    if len(m5) < 35 or len(m15) < 20:
+        raise ValueError("insufficient candles for momentum candle evaluation")
+
+    m5 = m5.copy().dropna(subset=["open", "high", "low", "close"])
+    m15 = m15.copy().dropna(subset=["open", "high", "low", "close"])
+
+    price = float(m5.iloc[-1]["close"])
+    atr_val = _atr(m5)
+    rsi_val = _rsi(m5)
+    regime = volatility_regime(m5["close"])
+
+    # --- M5 candle analysis ---
+    last = m5.iloc[-1]
+    body_ratio = _candle_body_ratio(last)
+    body_size = abs(float(last["close"]) - float(last["open"]))
+    is_bullish = float(last["close"]) > float(last["open"])
+
+    # --- M15 structure ---
+    m15_struct = market_structure(m15)
+
+    # --- EMA alignment (fast 12 / slow 26) ---
+    ema_fast = float(m5["close"].ewm(span=12, adjust=False).mean().iloc[-1])
+    ema_slow = float(m5["close"].ewm(span=26, adjust=False).mean().iloc[-1])
+    ema_aligned_long = ema_fast > ema_slow
+    ema_aligned_short = ema_fast < ema_slow
+
+    # --- Volume ---
+    vol_df = m5 if "volume" in m5.columns else pd.DataFrame()
+    volume_long = False
+    volume_short = False
+    if not vol_df.empty and vol_df["volume"].astype(float).nunique() > 1:
+        from .analysis import obv as obv_fn
+        obv_series = obv_fn(vol_df)
+        if len(obv_series.dropna()) >= 25:
+            slope = float(obv_series.iloc[-1]) - float(obv_series.iloc[-25])
+            volume_long = slope > 0
+            volume_short = slope < 0
+
+    # --- Composite scoring ---
+    long_score = 0
+    short_score = 0
+    long_reasons: List[str] = []
+    short_reasons: List[str] = []
+    cautions: List[str] = []
+
+    # 1. Candle body ratio (needs ≥ 0.6)
+    if body_ratio >= 0.6:
+        if is_bullish:
+            long_score += 30
+            long_reasons.append(f"M5 strong bullish candle (body {body_ratio:.0%})")
+        else:
+            short_score += 30
+            short_reasons.append(f"M5 strong bearish candle (body {body_ratio:.0%})")
+
+    # 2. Candle directional body size (relative to ATR)
+    if atr_val > 0:
+        body_atr = body_size / atr_val
+        if body_atr >= 0.3:
+            if is_bullish:
+                long_score += 15
+                long_reasons.append(f"M5 bullish body {body_atr:.1f}x ATR")
+            else:
+                short_score += 15
+                short_reasons.append(f"M5 bearish body {body_atr:.1f}x ATR")
+
+    # 3. RSI extremes
+    if rsi_val <= 35:
+        long_score += 20
+        long_reasons.append(f"M5 RSI oversold ({rsi_val:.1f})")
+    elif rsi_val >= 65:
+        short_score += 20
+        short_reasons.append(f"M5 RSI overbought ({rsi_val:.1f})")
+
+    # 4. EMA alignment
+    if ema_aligned_long:
+        long_score += 20
+        long_reasons.append("M5 EMA 12/26 bullish alignment")
+    elif ema_aligned_short:
+        short_score += 20
+        short_reasons.append("M5 EMA 12/26 bearish alignment")
+
+    # 5. M15 structure
+    if m15_struct.direction == "bullish":
+        long_score += 15
+        long_reasons.append(f"M15 bullish structure{f' {m15_struct.break_type}' if m15_struct.break_type else ''}")
+    elif m15_struct.direction == "bearish":
+        short_score += 15
+        short_reasons.append(f"M15 bearish structure{f' {m15_struct.break_type}' if m15_struct.break_type else ''}")
+
+    # Volume confirmation (informational, not scored)
+    vol_aligned_long = volume_long and long_score > short_score
+    vol_aligned_short = volume_short and short_score > long_score
+
+    # Determine direction
+    direction = "long" if long_score >= short_score else "short"
+    score = max(long_score, short_score)
+
+    if regime == "high_vol":
+        cautions.append("high-volatility regime; momentum signal may be unreliable")
+
+    action = "WAIT"
+    reasons: List[str] = []
+    if (
+        score >= score_threshold
+        and long_score != short_score
+        and regime != "high_vol"
+    ):
+        action = direction.upper()
+        reasons = long_reasons if direction == "long" else short_reasons
+    else:
+        reasons = long_reasons if long_score >= short_score else short_reasons
+        if score < score_threshold:
+            cautions.append(f"momentum score {score}/100 below {score_threshold} threshold")
+
+    # Entry / SL / TP
+    entry = stop = target = None
+    risk_reward = 2.0
+    if action == "LONG":
+        entry = price
+        # SL below the signal candle low minus ATR buffer
+        stop = float(last["low"]) - atr_val * 0.3
+        target = price + (price - stop) * risk_reward
+    elif action == "SHORT":
+        entry = price
+        # SL above the signal candle high plus ATR buffer
+        stop = float(last["high"]) + atr_val * 0.3
+        target = price - (stop - price) * risk_reward
+
+    return MomentumReading(
+        action=action,
+        score=min(score, 100),
+        price=price,
+        entry=entry,
+        stop_loss=stop,
+        take_profit=target,
+        risk_reward=risk_reward,
+        rsi=rsi_val,
+        atr=atr_val,
+        candle_pattern=candle_pattern(m5),
+        m5_body_ratio=round(body_ratio, 3),
+        ema_aligned=ema_aligned_long if action == "LONG" else ema_aligned_short if action == "SHORT" else False,
+        m15_aligned=m15_struct.direction == ("bullish" if action == "LONG" else "bearish"),
+        volume_aligned=vol_aligned_long or vol_aligned_short,
+        regime=regime,
+        reasons=reasons,
+        cautions=cautions,
     )

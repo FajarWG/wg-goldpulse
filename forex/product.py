@@ -9,7 +9,7 @@ def bot_name() -> str:
     return os.getenv("BOT_DISPLAY_NAME", "WG GoldPulse").strip() or "WG GoldPulse"
 
 
-CURRENT_STRATEGY_VERSION = "v5"
+CURRENT_STRATEGY_VERSION = "v6"
 
 
 BOT_DESCRIPTION = (
