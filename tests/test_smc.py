@@ -28,7 +28,7 @@ def test_bullish_macro_and_structures_can_confirm_long():
     m15 = resample(m5, "15min")
     assert market_structure(m5).direction == "bullish"
     assert market_structure(m15).direction == "bullish"
-    reading = evaluate(m5, m15, "up")
+    reading = evaluate(m5, m15, "up", score_threshold=65)
     assert reading.action == "LONG"
     assert reading.confluence_score >= 65
     assert reading.stop_loss < reading.entry < reading.take_profit
@@ -43,7 +43,7 @@ def test_conflicted_macro_blocks_directional_signal():
 
 def test_bearish_macro_and_structures_can_confirm_short():
     m5 = _trend_frame(direction=-1)
-    reading = evaluate(m5, resample(m5, "15min"), "down")
+    reading = evaluate(m5, resample(m5, "15min"), "down", score_threshold=65)
     assert reading.action == "SHORT"
     assert reading.stop_loss > reading.entry > reading.take_profit
 
@@ -94,7 +94,7 @@ def test_volume_bonus_requires_explicit_candidate_direction(monkeypatch):
             "volume_confirm": False,
         },
     )
-    reading = evaluate(m5, resample(m5, "15min"), "down")
+    reading = evaluate(m5, resample(m5, "15min"), "down", score_threshold=65)
     assert reading.action == "SHORT"
     assert reading.confluence_score == 65
     assert reading.volume_confirm is False
@@ -103,7 +103,7 @@ def test_volume_bonus_requires_explicit_candidate_direction(monkeypatch):
 
 def test_signal_message_is_human_readable_and_has_no_trade_decision_buttons():
     m5 = _trend_frame(direction=1)
-    reading = evaluate(m5, resample(m5, "15min"), "up")
+    reading = evaluate(m5, resample(m5, "15min"), "up", score_threshold=65)
     text = _telegram_text(reading)
     assert "BUY" in text
     assert "Entry:" in text

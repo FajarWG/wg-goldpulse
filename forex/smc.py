@@ -211,6 +211,7 @@ def evaluate(
     m15: pd.DataFrame,
     macro_bias: str,
     include_context: bool = True,
+    score_threshold: int = 80,
 ) -> SMCReading:
     if len(m5) < 35 or len(m15) < 35:
         raise ValueError("at least 35 closed candles are required on M5 and M15")
@@ -341,7 +342,7 @@ def evaluate(
     macro_allows = (direction == "long" and effective_bias == "up") or (direction == "short" and effective_bias == "down")
     structure_allows = m15_structure.direction == ("bullish" if direction == "long" else "bearish")
     if (
-        score >= 65
+        score >= score_threshold
         and macro_allows
         and structure_allows
         and long_score != short_score
@@ -351,8 +352,8 @@ def evaluate(
         reasons = long_reasons if direction == "long" else short_reasons
     else:
         reasons = long_reasons if long_score >= short_score else short_reasons
-        if score < 65:
-            cautions.append(f"confluence {score}/100 below 65 threshold")
+        if score < score_threshold:
+            cautions.append(f"confluence {score}/100 below {score_threshold} threshold")
         if not structure_allows:
             cautions.append("M15 structure does not confirm the candidate direction")
 
@@ -410,7 +411,7 @@ def _candle_body_ratio(candle: pd.Series) -> float:
 def momentum_candle(
     m5: pd.DataFrame,
     m15: pd.DataFrame,
-    score_threshold: int = 50,
+    score_threshold: int = 80,
 ) -> MomentumReading:
     """Lightweight momentum signal based on candle action — no macro bias needed.
 
@@ -425,7 +426,8 @@ def momentum_candle(
       EMA 12/26 aligned with candle direction       +20
       M15 structure aligned with candle direction   +15
 
-    A meaningful candle body is still required; trend alone cannot trigger it.
+    A meaningful candle body is required and EMA must agree with the candle
+    direction; trend alone cannot trigger it.
     """
     if len(m5) < 35 or len(m15) < 20:
         raise ValueError("insufficient candles for momentum candle evaluation")
@@ -513,10 +515,12 @@ def momentum_candle(
         cautions.append("high-volatility regime; momentum relies on strong price action")
 
     action = "WAIT"
-    if meaningful_body and score >= score_threshold:
+    if meaningful_body and score >= score_threshold and ema_aligned:
         action = direction.upper()
     elif not meaningful_body:
         cautions.append(f"last M5 candle body too small for a momentum signal (body {body_ratio:.0%})")
+    elif not ema_aligned:
+        cautions.append("EMA 12/26 does not confirm the candle direction")
     else:
         cautions.append(f"momentum score {score}/100 below {score_threshold} threshold")
 
