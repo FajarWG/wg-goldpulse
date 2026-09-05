@@ -144,6 +144,12 @@ Output di terminal menampilkan rekap Analisis Full lalu rekap Momentum Candle. H
 python backtest_main.py --strategy all --notify
 ```
 
+Di VPS, backtest lengkap (refresh data + kirim ke Telegram) bisa dipanggil lewat service mingguan:
+
+```bash
+sudo systemctl start xauusd-backtest.service
+```
+
 Parameter sinyal dibaca dari env: `SIGNAL_MAX_FULL_PER_DAY`, `SIGNAL_MAX_MOMENTUM_PER_DAY`, `SIGNAL_MAX_ACTIVE_MOMENTUM`, `SIGNAL_COOLDOWN_MINUTES`, `SIGNAL_TIMEOUT_MINUTES`.
 
 ## Testing
