@@ -246,6 +246,7 @@ def evaluate(
     short_reasons: List[str] = []
     cautions: List[str] = []
 
+    composite_direction = composite.get("vote", "neutral")
     bias_source = "unavailable"
     if macro_bias == "up":
         long_score += 25
@@ -255,10 +256,13 @@ def evaluate(
         short_score += 25
         short_reasons.append("H1/H4/D1 macro bias bearish")
         bias_source = "alignment"
+    elif macro_bias in ("stale", "unavailable") and composite_direction in ("long", "short"):
+        cautions.append(
+            f"macro bias {macro_bias}; using M5 composite vote as fallback bias"
+        )
     else:
         cautions.append(f"macro bias {macro_bias or 'unavailable'}; directional signal blocked")
 
-    composite_direction = composite.get("vote", "neutral")
     if composite_direction in ("long", "short"):
         if composite_direction == "long":
             long_score += 15
@@ -330,7 +334,11 @@ def evaluate(
 
     action = "WAIT"
     reasons: List[str] = []
-    macro_allows = (direction == "long" and macro_bias == "up") or (direction == "short" and macro_bias == "down")
+    if macro_bias in ("stale", "unavailable") and composite_direction in ("long", "short"):
+        effective_bias = "up" if composite_direction == "long" else "down"
+    else:
+        effective_bias = macro_bias
+    macro_allows = (direction == "long" and effective_bias == "up") or (direction == "short" and effective_bias == "down")
     structure_allows = m15_structure.direction == ("bullish" if direction == "long" else "bearish")
     if (
         score >= 65
@@ -406,14 +414,18 @@ def momentum_candle(
 ) -> MomentumReading:
     """Lightweight momentum signal based on candle action — no macro bias needed.
 
-    Scoring breakdown (max 100):
-      M5 candle body ratio ≥ 0.6        +30
-      M5 candle directional body size    +15
-      RSI extreme (≤35 / ≥65)           +20
-      EMA 12/26 alignment                +20
-      M15 structure alignment            +15
+    The last closed M5 candle sets the direction; every other factor confirms
+    that direction (not a separate long/short race). ``high_vol`` is a caution
+    only, never a block: strong momentum often happens inside volatility spikes.
 
-    Threshold defaults to 50 (lower than the full SMC 65).
+    Confirmation scoring (max 100):
+      M5 candle body ratio ≥ 0.6 (≥ 0.4 partial)   +35 / +18
+      M5 candle body vs ATR ≥ 0.3 (≥ 0.15 partial) +20 / +10
+      RSI momentum with candle direction            +20 / +10
+      EMA 12/26 aligned with candle direction       +20
+      M15 structure aligned with candle direction   +15
+
+    A meaningful candle body is still required; trend alone cannot trigger it.
     """
     if len(m5) < 35 or len(m15) < 20:
         raise ValueError("insufficient candles for momentum candle evaluation")
@@ -426,108 +438,87 @@ def momentum_candle(
     rsi_val = _rsi(m5)
     regime = volatility_regime(m5["close"])
 
-    # --- M5 candle analysis ---
+    # --- M5 candle analysis: the candle direction drives the signal ---
     last = m5.iloc[-1]
     body_ratio = _candle_body_ratio(last)
     body_size = abs(float(last["close"]) - float(last["open"]))
     is_bullish = float(last["close"]) > float(last["open"])
+    is_bearish = not is_bullish
+    direction = "long" if is_bullish else "short"
 
     # --- M15 structure ---
     m15_struct = market_structure(m15)
+    m15_aligned = m15_struct.direction == ("bullish" if is_bullish else "bearish")
 
     # --- EMA alignment (fast 12 / slow 26) ---
     ema_fast = float(m5["close"].ewm(span=12, adjust=False).mean().iloc[-1])
     ema_slow = float(m5["close"].ewm(span=26, adjust=False).mean().iloc[-1])
-    ema_aligned_long = ema_fast > ema_slow
-    ema_aligned_short = ema_fast < ema_slow
+    ema_aligned = (ema_fast > ema_slow) if is_bullish else (ema_fast < ema_slow)
 
     # --- Volume ---
     vol_df = m5 if "volume" in m5.columns else pd.DataFrame()
-    volume_long = False
-    volume_short = False
+    volume_aligned = False
     if not vol_df.empty and vol_df["volume"].astype(float).nunique() > 1:
         from .analysis import obv as obv_fn
         obv_series = obv_fn(vol_df)
         if len(obv_series.dropna()) >= 25:
             slope = float(obv_series.iloc[-1]) - float(obv_series.iloc[-25])
-            volume_long = slope > 0
-            volume_short = slope < 0
+            volume_aligned = (slope > 0) if is_bullish else (slope < 0)
 
-    # --- Composite scoring ---
-    long_score = 0
-    short_score = 0
-    long_reasons: List[str] = []
-    short_reasons: List[str] = []
+    # --- Confirmation scoring: the candle sets direction, the rest agrees ---
+    score = 0
+    reasons: List[str] = []
     cautions: List[str] = []
 
-    # 1. Candle body ratio (needs ≥ 0.6)
+    # 1. Candle body ratio
     if body_ratio >= 0.6:
-        if is_bullish:
-            long_score += 30
-            long_reasons.append(f"M5 strong bullish candle (body {body_ratio:.0%})")
-        else:
-            short_score += 30
-            short_reasons.append(f"M5 strong bearish candle (body {body_ratio:.0%})")
+        score += 35
+        reasons.append(f"M5 strong {'bullish' if is_bullish else 'bearish'} candle (body {body_ratio:.0%})")
+    elif body_ratio >= 0.4:
+        score += 18
+        reasons.append(f"M5 decent {'bullish' if is_bullish else 'bearish'} candle (body {body_ratio:.0%})")
 
     # 2. Candle directional body size (relative to ATR)
+    body_atr = 0.0
     if atr_val > 0:
         body_atr = body_size / atr_val
         if body_atr >= 0.3:
-            if is_bullish:
-                long_score += 15
-                long_reasons.append(f"M5 bullish body {body_atr:.1f}x ATR")
-            else:
-                short_score += 15
-                short_reasons.append(f"M5 bearish body {body_atr:.1f}x ATR")
+            score += 20
+            reasons.append(f"M5 {'bullish' if is_bullish else 'bearish'} body {body_atr:.1f}x ATR")
+        elif body_atr >= 0.15:
+            score += 10
+            reasons.append(f"M5 {'bullish' if is_bullish else 'bearish'} body {body_atr:.1f}x ATR")
 
-    # 3. RSI extremes
-    if rsi_val <= 35:
-        long_score += 20
-        long_reasons.append(f"M5 RSI oversold ({rsi_val:.1f})")
-    elif rsi_val >= 65:
-        short_score += 20
-        short_reasons.append(f"M5 RSI overbought ({rsi_val:.1f})")
+    # 3. EMA alignment
+    if ema_aligned:
+        score += 20
+        reasons.append(f"M5 EMA 12/26 {'bullish' if is_bullish else 'bearish'} alignment")
 
-    # 4. EMA alignment
-    if ema_aligned_long:
-        long_score += 20
-        long_reasons.append("M5 EMA 12/26 bullish alignment")
-    elif ema_aligned_short:
-        short_score += 20
-        short_reasons.append("M5 EMA 12/26 bearish alignment")
+    # 4. RSI momentum confirmation (trend-following, not contrarian)
+    if is_bullish and rsi_val >= 55:
+        score += 20 if rsi_val >= 65 else 10
+        reasons.append(f"M5 RSI bullish momentum ({rsi_val:.1f})")
+    elif is_bearish and rsi_val <= 45:
+        score += 20 if rsi_val <= 35 else 10
+        reasons.append(f"M5 RSI bearish momentum ({rsi_val:.1f})")
 
-    # 5. M15 structure
-    if m15_struct.direction == "bullish":
-        long_score += 15
-        long_reasons.append(f"M15 bullish structure{f' {m15_struct.break_type}' if m15_struct.break_type else ''}")
-    elif m15_struct.direction == "bearish":
-        short_score += 15
-        short_reasons.append(f"M15 bearish structure{f' {m15_struct.break_type}' if m15_struct.break_type else ''}")
+    # 5. M15 structure alignment
+    if m15_aligned:
+        score += 15
+        reasons.append(f"M15 {'bullish' if is_bullish else 'bearish'} structure{f' {m15_struct.break_type}' if m15_struct.break_type else ''}")
 
-    # Volume confirmation (informational, not scored)
-    vol_aligned_long = volume_long and long_score > short_score
-    vol_aligned_short = volume_short and short_score > long_score
-
-    # Determine direction
-    direction = "long" if long_score >= short_score else "short"
-    score = max(long_score, short_score)
+    meaningful_body = body_ratio >= 0.4 or body_atr >= 0.15
 
     if regime == "high_vol":
-        cautions.append("high-volatility regime; momentum signal may be unreliable")
+        cautions.append("high-volatility regime; momentum relies on strong price action")
 
     action = "WAIT"
-    reasons: List[str] = []
-    if (
-        score >= score_threshold
-        and long_score != short_score
-        and regime != "high_vol"
-    ):
+    if meaningful_body and score >= score_threshold:
         action = direction.upper()
-        reasons = long_reasons if direction == "long" else short_reasons
+    elif not meaningful_body:
+        cautions.append(f"last M5 candle body too small for a momentum signal (body {body_ratio:.0%})")
     else:
-        reasons = long_reasons if long_score >= short_score else short_reasons
-        if score < score_threshold:
-            cautions.append(f"momentum score {score}/100 below {score_threshold} threshold")
+        cautions.append(f"momentum score {score}/100 below {score_threshold} threshold")
 
     # Entry / SL / TP
     entry = stop = target = None
@@ -555,9 +546,9 @@ def momentum_candle(
         atr=atr_val,
         candle_pattern=candle_pattern(m5),
         m5_body_ratio=round(body_ratio, 3),
-        ema_aligned=ema_aligned_long if action == "LONG" else ema_aligned_short if action == "SHORT" else False,
-        m15_aligned=m15_struct.direction == ("bullish" if action == "LONG" else "bearish"),
-        volume_aligned=vol_aligned_long or vol_aligned_short,
+        ema_aligned=ema_aligned,
+        m15_aligned=m15_aligned,
+        volume_aligned=volume_aligned,
         regime=regime,
         reasons=reasons,
         cautions=cautions,

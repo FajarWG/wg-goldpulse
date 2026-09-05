@@ -220,6 +220,7 @@ def main() -> int:
     event_path = state_dir / "signals" / f"{now.date().isoformat()}.jsonl"
     max_full = int(os.getenv("SIGNAL_MAX_FULL_PER_DAY", "5"))
     max_momentum = int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5"))
+    max_active_momentum = int(os.getenv("SIGNAL_MAX_ACTIVE_MOMENTUM", "3"))
     cooldown = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30"))
 
     # --- Full analysis signal ---
@@ -253,6 +254,7 @@ def main() -> int:
         max_per_day=max_momentum,
         cooldown_minutes=cooldown,
         signal_type="momentum",
+        max_active=max_active_momentum,
     ):
         momentum_signal_id = tracker.create_signal(momentum_reading, m5.index[-1], created_at=now, signal_type="momentum")
         momentum_created = momentum_signal_id is not None

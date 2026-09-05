@@ -163,17 +163,19 @@ class SignalTracker:
         max_per_day: int = 5,
         cooldown_minutes: int = 30,
         signal_type: str = "full",
+        max_active: Optional[int] = 1,
     ) -> bool:
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
         with self._connect() as connection:
-            if connection.execute(
+            active_count = connection.execute(
                 """
-                SELECT 1 FROM paper_signals
-                WHERE status = 'active' AND strategy_version = ? AND signal_type = ? LIMIT 1
+                SELECT COUNT(*) FROM paper_signals
+                WHERE status = 'active' AND strategy_version = ? AND signal_type = ?
                 """,
                 (self.strategy_version, signal_type),
-            ).fetchone():
+            ).fetchone()[0]
+            if max_active is not None and active_count >= max_active:
                 return False
             count = connection.execute(
                 """

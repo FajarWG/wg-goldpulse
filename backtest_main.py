@@ -81,6 +81,7 @@ def main() -> int:
         timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
         max_per_day=int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5")),
         cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30")),
+        max_active=int(os.getenv("SIGNAL_MAX_ACTIVE_MOMENTUM", "3")),
     )
     save_backtest(backtest_dir / "momentum_v1", momentum_summary, momentum_trades)
 

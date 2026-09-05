@@ -407,6 +407,7 @@ def run_momentum_backtest(
     timeout_minutes: int = 240,
     max_per_day: int = 5,
     cooldown_minutes: int = 30,
+    max_active: int = 3,
 ) -> Tuple[BacktestSummary, List[BacktestTrade]]:
     """Backtest the momentum-candle-only strategy (no macro bias dependency)."""
     m5 = frames["M5"].copy().sort_index()
@@ -417,6 +418,7 @@ def run_momentum_backtest(
     trades: List[BacktestTrade] = []
     daily_counts: Dict[str, int] = {}
     next_allowed: Optional[pd.Timestamp] = None
+    open_end_times: List[pd.Timestamp] = []
     evaluations = 0
     max_score = 0
     warmup_bars = 500
@@ -425,6 +427,9 @@ def run_momentum_backtest(
 
     for index in range(500, len(m5) - 1):
         timestamp = m5.index[index]
+        open_end_times = [end for end in open_end_times if end > timestamp]
+        if len(open_end_times) >= max_active:
+            continue
         if next_allowed is not None and timestamp < next_allowed:
             continue
         day = timestamp.tz_convert("UTC").date().isoformat()
@@ -486,6 +491,7 @@ def run_momentum_backtest(
         )
         regime_counts[reading.regime] = regime_counts.get(reading.regime, 0) + 1
         daily_counts[day] = daily_counts.get(day, 0) + 1
+        open_end_times.append(closed_at)
         next_allowed = max(opened_at + timedelta(minutes=cooldown_minutes), closed_at)
 
     wins = sum(trade.result == "win" for trade in trades)
