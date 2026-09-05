@@ -121,11 +121,15 @@ Periksa diff dan release notes sebelum menjalankan update pada VPS produksi.
 
 ## Backtest
 
-Backtest memakai cache M5/H1/H4/D1 di `state_dir/backtest/cache`. Refresh cache kalau datanya kurang (dipakai ulang pada run berikutnya):
+Backtest memakai cache M5/H1/H4/D1 di `state_dir/backtest/cache`. Refresh cache kalau datanya kurang (dipakai ulang pada run berikutnya).
+
+Di VPS, command manual harus memuat `/etc/xauusd-analysis.env` dulu (berisi API key), karena file itu hanya dibaca otomatis oleh systemd lewat `EnvironmentFile`:
 
 ```bash
-python backtest_main.py --fetch-only
-python backtest_main.py --refresh --fetch-only
+cd /opt/xauusd-analysis
+set -a; . /etc/xauusd-analysis.env; set +a
+.venv/bin/python backtest_main.py --fetch-only
+.venv/bin/python backtest_main.py --refresh --fetch-only
 ```
 
 Jalankan replay (strategi aktif `v6` default, atau `--strategy all` untuk semua versi):
