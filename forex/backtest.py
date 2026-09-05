@@ -444,7 +444,7 @@ def run_momentum_backtest(
         if len(m15_window) < 20 or len(m5_window) < 35:
             continue
         try:
-            reading = momentum_candle(m5_window, m15_window)
+            reading = momentum_candle(m5_window, m15_window, reward_r=reward_r)
         except ValueError:
             continue
         evaluations += 1
@@ -455,12 +455,7 @@ def run_momentum_backtest(
         opened_at = timestamp
         deadline = opened_at + timedelta(minutes=timeout_minutes)
         future = m5.iloc[index + 1 :]
-        risk = abs(float(reading.entry) - float(reading.stop_loss))
-        target = (
-            float(reading.entry) + risk * reward_r
-            if reading.action == "LONG"
-            else float(reading.entry) - risk * reward_r
-        )
+        target = float(reading.take_profit)
         result, result_r, closed_at, ambiguous = _resolve_trade(
             future,
             reading.action,

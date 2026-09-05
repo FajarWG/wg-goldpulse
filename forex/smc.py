@@ -412,6 +412,7 @@ def momentum_candle(
     m5: pd.DataFrame,
     m15: pd.DataFrame,
     score_threshold: int = 80,
+    reward_r: float = 1.0,
 ) -> MomentumReading:
     """Lightweight momentum signal based on candle action — no macro bias needed.
 
@@ -526,7 +527,7 @@ def momentum_candle(
 
     # Entry / SL / TP
     entry = stop = target = None
-    risk_reward = 2.0
+    risk_reward = reward_r
     if action == "LONG":
         entry = price
         # SL below the signal candle low minus ATR buffer

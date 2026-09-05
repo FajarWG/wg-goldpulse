@@ -202,6 +202,7 @@ def main() -> int:
     max_full = int(os.getenv("SIGNAL_MAX_FULL_PER_DAY", "5"))
     max_momentum = int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5"))
     max_active_momentum = int(os.getenv("SIGNAL_MAX_ACTIVE_MOMENTUM", "3"))
+    momentum_reward_r = float(os.getenv("SIGNAL_MOMENTUM_REWARD_R", "1.0"))
     cooldown = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30"))
 
     # --- Full analysis signal ---
@@ -226,7 +227,7 @@ def main() -> int:
         )
 
     # --- Momentum candle signal ---
-    momentum_reading = momentum_candle(m5, m15)
+    momentum_reading = momentum_candle(m5, m15, reward_r=momentum_reward_r)
     momentum_created = False
     momentum_signal_id = None
     momentum_notification = False
