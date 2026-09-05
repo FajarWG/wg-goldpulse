@@ -24,7 +24,7 @@ Twelve Data key 1 + key 2
           │                                      └── SQLite forward validation
           │
           └── Sabtu 07:30 JST
-                Refresh incremental → replay V5 → Telegram backtest report
+                Refresh incremental → replay V6 + momentum → Telegram backtest report
 ```
 
 Urutan `:00` lalu `:02` memastikan analisis besar diperbarui sebelum pemeriksaan signal pertama pada jam tersebut.
@@ -51,11 +51,12 @@ Urutan `:00` lalu `:02` memastikan analisis besar diperbarui sebelum pemeriksaan
 ### 3. Forward validation otomatis
 
 - Semua signal READY disimpan dan dinilai otomatis.
-- TP lebih dulu: menang `+2R` pada strategi eksperimen V5.
+- TP lebih dulu: menang `+2R` pada strategi eksperimen V6.
 - SL lebih dulu: kalah `-1R`.
 - TP dan SL pada candle M5 yang sama: dihitung kalah secara konservatif.
 - Tidak selesai dalam empat jam: kedaluwarsa dan tidak masuk pembagi win rate.
-- Maksimal tiga signal per hari, cooldown 45 menit, dan satu signal aktif.
+- Analisis Full: maksimal 5 signal per hari, cooldown 30 menit, satu signal aktif.
+- Momentum Candle: maksimal 5 signal per hari, cooldown 30 menit, hingga 3 signal aktif bersamaan (dapat diatur lewat `SIGNAL_MAX_ACTIVE_MOMENTUM`).
 
 ### 4. Telegram interaktif
 
@@ -89,11 +90,11 @@ Referensi konfigurasi resmi: [Groq OpenAI compatibility](https://console.groq.co
 
 ## Historical backtest
 
-Backtest menyimpan versi strategi secara terpisah agar perubahan aturan tidak menghapus pembanding. Operasional saat ini hanya memakai:
+Backtest menyimpan versi strategi secara terpisah agar perubahan aturan tidak menghapus pembanding. Operasional saat ini memakai dua strategi aktif:
 
-- **V5 (eksperimen/forward-test):** macro H1/H4/D1, struktur M15/M5, composite vote, regime volatilitas, volume direction, liquidity sweep, FVG, candle pattern, dan target 2R.
-- V5 memakai maksimal tiga signal per hari, cooldown 45 menit, satu posisi simulasi aktif, dan timeout empat jam.
-- V1–V4 adalah arsip riset dan tidak dijalankan oleh service mingguan.
+- **V6 / Analisis Full (eksperimen/forward-test):** macro H1/H4/D1, struktur M15/M5, composite vote, regime volatilitas, volume direction, liquidity sweep, FVG, candle pattern, dan target 2R.
+- **Momentum Candle (`momentum_v1`):** sinyal berbasis aksi harga candle M5 terakhir tanpa ketergantungan macro bias; cocok untuk kondisi momentum, dengan target 2R.
+- V1–V5 adalah arsip riset dan tidak dijalankan oleh service mingguan.
 
 Data yang diambil dan disimpan lokal:
 
@@ -106,12 +107,12 @@ Twelve Data membatasi satu respons historical time series hingga 5.000 data poin
 
 ### Otomatis
 
-Backtest V5 berjalan setiap Sabtu pukul 07:30 JST, setelah sesi mingguan XAUUSD ditutup. Cache lama dipertahankan; hanya bagian data terbaru yang diambil. Replay default memakai 90 hari terakhir dan hasil JSON/CSV dikirim ke Telegram.
+Backtest mingguan berjalan setiap Sabtu pukul 07:30 JST, setelah sesi mingguan XAUUSD ditutup. Cache lama dipertahankan; hanya bagian data terbaru yang diambil. Replay default memakai 90 hari terakhir dan hasil JSON/CSV (Analisis Full V6 + Momentum Candle) dikirim ke Telegram.
 
 ### Manual
 
 ```bash
-# Refresh data dan jalankan V5 melalui service
+# Refresh data dan jalankan backtest lengkap melalui service
 sudo systemctl start xauusd-backtest.service
 
 # Lihat hasil dari Telegram
@@ -122,7 +123,11 @@ Menjalankan tanpa mengambil data baru:
 
 ```bash
 cd /opt/xauusd-analysis
-sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy v5
+# Analisis Full V6 saja
+sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy v6
+
+# Semua versi + momentum candle
+sudo -u ubuntu /opt/xauusd-analysis/.venv/bin/python backtest_main.py --strategy all
 ```
 
 Hasil utama:
@@ -138,7 +143,9 @@ Hasil utama:
 
 Backtest historis dan forward validation harus dibaca terpisah. Backtest membantu menyaring strategi; forward validation mengukur perilaku sistem pada data baru yang belum pernah dilihat.
 
-## Hasil validasi strategi aktif V5
+## Hasil validasi strategi aktif V5 (arsip)
+
+V5 sudah digantikan V6. Hasil di bawah disimpan sebagai arsip riset.
 
 Validasi setelah koreksi matematika pada 2 September 2026:
 

@@ -13,6 +13,7 @@ WG GoldPulse adalah bot analisis XAU/USD untuk Ubuntu/VPS. Sistem mengambil data
 | V3/V3.1 | Riset gagal | Tidak mencapai promotion gate |
 | V4 | Riset gagal | Development 75,3% WR, tetapi locked holdout hanya 54,4% dan −10,8R setelah cost |
 | V5 | Eksperimen/forward-test | 27 Apr–1 Sep 2026: 31,9% WR, −6R, PF 0,94; belum lolos promotion gate |
+| V6 | Aktif/forward-test | Dual signal: Analisis Full + Momentum Candle; hasil masih dikumpulkan |
 
 Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus diperlakukan sebagai eksperimen manual, bukan instruksi trading.
 
@@ -21,9 +22,10 @@ Tidak ada versi yang saat ini boleh dianggap profitable. Signal Telegram harus d
 - Analisis H1/H4/D1 dengan EMA, RSI, MACD, ATR, Bollinger, Donchian, volatility regime, support, dan resistance.
 - Konfirmasi M5/M15 berbasis market structure, BOS, liquidity sweep, FVG, candle pattern, dan confluence score.
 - Signal LONG/SHORT/WAIT dengan entry, batas salah/SL, dan target referensi.
+- Dua tipe signal independen: **Analisis Full** (SMC confluence) dan **Momentum Candle** (candle-action). Masing-masing punya cooldown, daily cap, dan statistik terpisah.
 - Telegram commands dan inline buttons untuk analisis AI, statistik, backtest, dan bantuan. Tidak ada tombol Ambil/Lewati.
 - Forward validation otomatis: menang, kalah, expired, win rate, dan akumulasi R.
-- Historical replay strategi aktif V5 dengan cache data UTC, versioned output, drawdown, profit factor, p-value sign-randomisation, dan breakdown regime. V1–V4 tetap terdokumentasi sebagai riset lama.
+- Historical replay strategi aktif V6 plus strategi momentum dengan cache data UTC, versioned output, drawdown, profit factor, p-value sign-randomisation, dan breakdown regime. V1–V5 tetap terdokumentasi sebagai riset lama.
 - Dual Twelve Data API key, quota accounting, failover, throttling, dan retry.
 - AI explanation **on-demand** (fallback Groq → Gemini → DeepSeek): tidak pernah otomatis. Dipicu manual via `python main.py --ai`, tombol "AI Analisis" di desktop, atau `/ai`/tombol 🤖 di Telegram.
 - systemd services/timers untuk market analysis, signal checks, Telegram listener, dan weekly backtest.
@@ -45,7 +47,7 @@ Isi `.env` secara lokal. Jangan commit API key atau token.
 python main.py --symbols XAUUSD --timeframes H1,H4,D1 --stdout
 python main.py --symbols XAUUSD --ai --stdout   # tambahkan penjelasan AI (manual)
 python signal_main.py
-python backtest_main.py --strategy v5
+python backtest_main.py --strategy v6
 python telegram_bot_main.py
 ```
 
@@ -108,11 +110,41 @@ journalctl -u xauusd-telegram.service -n 50 --no-pager
 cd /opt/xauusd-analysis
 git pull --ff-only
 .venv/bin/pip install -e .
-sudo systemctl restart xauusd-telegram.service
 sudo systemctl daemon-reload
+sudo systemctl restart xauusd-signal.timer xauusd-backtest.timer
+sudo systemctl restart xauusd-telegram.service
 ```
 
+`xauusd-signal` dan `xauusd-backtest` adalah oneshot yang dijalankan timer, jadi restart timernya (bukan hanya service-nya) supaya reload unit terbaru. Tambahkan `SIGNAL_MAX_ACTIVE_MOMENTUM=3` ke `/etc/xauusd-analysis.env` bila ingin mengatur jumlah momentum aktif bersamaan (default 3 di kode).
+
 Periksa diff dan release notes sebelum menjalankan update pada VPS produksi.
+
+## Backtest
+
+Backtest memakai cache M5/H1/H4/D1 di `state_dir/backtest/cache`. Refresh cache kalau datanya kurang (dipakai ulang pada run berikutnya):
+
+```bash
+python backtest_main.py --fetch-only
+python backtest_main.py --refresh --fetch-only
+```
+
+Jalankan replay (strategi aktif `v6` default, atau `--strategy all` untuk semua versi):
+
+```bash
+# Analisis Full saja
+python backtest_main.py --strategy v6
+
+# Semua versi + momentum candle
+python backtest_main.py --strategy all
+```
+
+Output di terminal menampilkan rekap Analisis Full lalu rekap Momentum Candle. Hasil tersimpan di `state_dir/backtest/<label>/latest.json` (`momentum_v1` untuk momentum). Kirim ke Telegram:
+
+```bash
+python backtest_main.py --strategy all --notify
+```
+
+Parameter sinyal dibaca dari env: `SIGNAL_MAX_FULL_PER_DAY`, `SIGNAL_MAX_MOMENTUM_PER_DAY`, `SIGNAL_MAX_ACTIVE_MOMENTUM`, `SIGNAL_COOLDOWN_MINUTES`, `SIGNAL_TIMEOUT_MINUTES`.
 
 ## Testing
 
