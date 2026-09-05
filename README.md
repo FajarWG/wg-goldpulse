@@ -179,6 +179,17 @@ python research_rr.py
 
 Output membandingkan jumlah signal, win rate, total R, profit factor, dan drawdown untuk setiap reward:risk. Nilai momentum reward:risk bisa di-override lewat `--momentum-rr` atau `SIGNAL_MOMENTUM_REWARD_R`.
 
+### Validasi walk-forward momentum
+
+`research_walkforward.py` membagi history menjadi periode in-sample (yang dipakai tuning) dan out-of-sample/holdout (yang belum pernah disentuh), lalu membandingkan performa momentum di keduanya:
+
+```bash
+python research_walkforward.py --lookback-days 180
+python research_walkforward.py --holdout-start 2026-08-01
+```
+
+Kalau holdout tetap positif dengan PF > 1, edge momentum lebih meyakinkan. Kalau holdout negatif, hasil 90 hari terakhir kemungkinan overfit.
+
 ## Testing
 
 ```bash
@@ -202,6 +213,7 @@ telegram_bot_main.py      Telegram listener dan commands
 backtest_main.py          historical replay
 research_main.py          analisis filter signal dari latest_trades.csv
 research_rr.py            sweep reward:risk strategi momentum
+research_walkforward.py   validasi out-of-sample momentum
 usage_main.py             laporan pemakaian Twelve Data
 ```
 
