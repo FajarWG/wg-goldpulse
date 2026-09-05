@@ -77,7 +77,7 @@ def main() -> int:
         all_trades[version] = trades
 
     # Momentum candle backtest
-    momentum_rr = args.momentum_rr if args.momentum_rr is not None else float(os.getenv("SIGNAL_MOMENTUM_REWARD_R", "2.0"))
+    momentum_rr = args.momentum_rr if args.momentum_rr is not None else float(os.getenv("SIGNAL_MOMENTUM_REWARD_R", "1.0"))
     momentum_summary, momentum_trades = run_momentum_backtest(
         frames,
         timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
