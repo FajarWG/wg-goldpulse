@@ -105,7 +105,8 @@ def test_signal_message_is_human_readable_and_has_no_trade_decision_buttons():
     m5 = _trend_frame(direction=1)
     reading = evaluate(m5, resample(m5, "15min"), "up")
     text = _telegram_text(reading)
-    assert "SIGNAL SIAP BUY" in text
-    assert "📍 RENCANA HARGA" in text
-    assert "Skor adalah kekuatan konfirmasi" in text
+    assert "BUY" in text
+    assert "Entry:" in text
+    assert "SL:" in text and "TP:" in text
+    assert "Skor = kekuatan konfirmasi" in text
     assert "Ambil" not in text and "Lewati" not in text

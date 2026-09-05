@@ -548,50 +548,17 @@ def format_backtest(summary: BacktestSummary, trades: Optional[List[BacktestTrad
     win_rate = "Belum tersedia" if summary.win_rate is None else f"{summary.win_rate:.1f}%"
     factor = "—" if summary.profit_factor is None else f"{summary.profit_factor:.2f}"
     p_value = "—" if summary.monte_carlo_p_value is None else f"{summary.monte_carlo_p_value:.3f}"
-    regime_text = ", ".join(
-        f"{key}: {count}" for key, count in sorted(summary.regime_breakdown.items())
-    ) or "—"
     lines = [
-        "🧪 WG GOLDPULSE — HISTORICAL BACKTEST",
+        "🧪 WG GOLDPULSE — BACKTEST",
         "━━━━━━━━━━━━━━━━",
         f"Periode: {summary.period_start[:10]} → {summary.period_end[:10]}",
-        f"Data M5: {summary.m5_candles:,} candle",
-        f"Evaluasi: {summary.evaluations:,}",
+        f"Evaluasi: {summary.evaluations:,} · M5: {summary.m5_candles:,} candle",
         "",
-        f"Signal: {summary.signals}",
-        f"✅ Menang: {summary.wins}",
-        f"❌ Kalah: {summary.losses}",
-        f"⌛ Kedaluwarsa: {summary.expired}",
-        f"🎯 Win rate: {win_rate}",
-        "",
-        f"📈 Total: {summary.total_r:+.1f}R",
-        f"📉 Max drawdown: {summary.max_drawdown_r:.1f}R",
-        f"⚖️ Profit factor: {factor}",
-        f"🎲 P-value (sign-randomisation): {p_value}",
-        f"🌡️ Regime: {regime_text}",
-        f"🔎 Skor kandidat tertinggi: {summary.max_candidate_score}/100",
+        f"Signal: {summary.signals} · Win rate: {win_rate}",
+        f"✅ {summary.wins}  ❌ {summary.losses}  ⌛ {summary.expired}",
+        f"Total: {summary.total_r:+.1f}R · PF {factor} · DD {summary.max_drawdown_r:.1f}R",
+        f"P-value: {p_value}",
     ]
-
-    # Per-type breakdown when trades are available
-    if trades:
-        full_trades = [t for t in trades if t.signal_type == "full"]
-        momentum_trades = [t for t in trades if t.signal_type == "momentum"]
-        for trade_list, label in [(full_trades, "Analisis Full"), (momentum_trades, "Momentum Candle")]:
-            if not trade_list:
-                continue
-            t_wins = sum(t.result == "win" for t in trade_list)
-            t_losses = sum(t.result == "loss" for t in trade_list)
-            t_expired = sum(t.result == "expired" for t in trade_list)
-            t_completed = t_wins + t_losses
-            t_r = sum(t.result_r for t in trade_list)
-            t_wr = f"{t_wins / t_completed * 100:.1f}%" if t_completed else "—"
-            lines.extend([
-                "",
-                f"📋 {label}",
-                f"Signal: {len(trade_list)} · WR: {t_wr} · {t_r:+.1f}R",
-                f"Menang: {t_wins} · Kalah: {t_losses} · Kedaluwarsa: {t_expired}",
-            ])
-
     lines.extend([
         "━━━━━━━━━━━━━━━━",
         "Hasil historis bukan jaminan performa berikutnya.",

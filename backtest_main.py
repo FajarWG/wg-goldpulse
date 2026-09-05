@@ -86,8 +86,8 @@ def main() -> int:
     save_backtest(backtest_dir / "momentum_v1", momentum_summary, momentum_trades)
 
     active_version = CURRENT_STRATEGY_VERSION if args.strategy == "all" else args.strategy
-    text = format_backtest(results[active_version], all_trades.get(active_version, []))
-    text += "\n\n" + format_backtest(momentum_summary, momentum_trades)
+    text = f"📋 Analisis Full · {active_version}\n" + format_backtest(results[active_version], all_trades.get(active_version, []))
+    text += "\n\n" + "📋 Momentum Candle · momentum_v1\n" + format_backtest(momentum_summary, momentum_trades)
     print(text)
     print(f"Data fetched: {', '.join(fetched) if fetched else 'none (cache)'}")
     if args.notify and config.telegram.enabled:

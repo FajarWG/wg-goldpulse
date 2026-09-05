@@ -164,8 +164,9 @@ def test_backtest_summary_format_shows_new_fields(tmp_path):
         regime_breakdown={"normal": 8, "high_vol": 2},
     )
     text = format_backtest(summary)
-    assert "P-value (sign-randomisation): 0.020" in text
-    assert "Regime: high_vol: 2, normal: 8" in text
+    assert "P-value: 0.020" in text
+    assert "Total: +8.0R" in text
+    assert "DD 1.5R" in text
 
 
 def test_monte_carlo_pvalue_deterministic_and_bounded():

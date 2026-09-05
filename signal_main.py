@@ -97,40 +97,29 @@ def _telegram_text(reading: SMCReading, generated_at: Optional[datetime] = None)
         None: "tidak tersedia",
     }[reading.volume_confirm]
     lines = [
-        f"🥇 {bot_name().upper()} — SIGNAL SIAP {action_label}",
-        "📋 Tipe: Analisis Full",
+        f"🥇 {bot_name().upper()} — {action_label}",
+        "📋 Analisis Full",
         f"Waktu: {generated_at:%Y-%m-%d %H:%M} UTC",
         "━━━━━━━━━━━━━━━━━━━━",
-        "",
-        "📍 RENCANA HARGA",
     ]
     if reading.action in ("LONG", "SHORT"):
         lines.extend([
-            f"Entry referensi: {reading.entry:.2f}",
-            f"Stop loss: {reading.stop_loss:.2f}",
-            f"Take profit: {reading.take_profit:.2f}",
-            f"Risk/reward: 1:{reading.risk_reward:.1f}",
+            f"Entry: {reading.entry:.2f}",
+            f"SL: {reading.stop_loss:.2f} · TP: {reading.take_profit:.2f}",
+            f"RR: 1:{reading.risk_reward:.1f}",
         ])
     lines.extend([
-        "",
-        "🔎 KONFIRMASI",
-        f"Skor: {reading.confluence_score}/100",
-        f"Arah H1/H4/D1: {macro_label}",
-        f"Struktur M15: {structure_label.get(reading.m15_structure, reading.m15_structure)}",
-        f"Struktur M5: {structure_label.get(reading.m5_structure, reading.m5_structure)}",
-        f"RSI M5: {reading.rsi:.1f}",
-        f"Kondisi pasar: {regime_label}",
-        f"Volume: {volume_label}",
-        "",
-        "Skor adalah kekuatan konfirmasi, bukan persentase peluang menang.",
+        f"Skor: {reading.confluence_score}/100 · RSI M5: {reading.rsi:.1f}",
+        f"Macro: {macro_label} · M15: {structure_label.get(reading.m15_structure, reading.m15_structure)} · M5: {structure_label.get(reading.m5_structure, reading.m5_structure)}",
+        f"Market: {regime_label} · Volume: {volume_label}",
     ])
     if reading.reasons:
-        lines.extend(["", "✅ ALASAN SIGNAL", *[f"• {reason}" for reason in reading.reasons]])
+        lines.extend(["", "✅ " + " · ".join(reading.reasons)])
     if reading.cautions:
-        lines.extend(["", "⚠️ PERHATIAN", *[f"• {item}" for item in reading.cautions]])
+        lines.extend(["⚠️ " + " · ".join(reading.cautions)])
     lines.extend([
-        "",
-        "Bot mencatat hasil sampai TP, SL, atau kedaluwarsa. Tidak ada transaksi otomatis.",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Skor = kekuatan konfirmasi, bukan peluang menang. Bot tidak auto-trading.",
     ])
     return "\n".join(lines)
 
@@ -148,44 +137,36 @@ def _momentum_text(reading: MomentumReading, generated_at: Optional[datetime] = 
         pattern_label = reading.candle_pattern[0] if isinstance(reading.candle_pattern, tuple) else reading.candle_pattern
         pattern_label = str(pattern_label).replace("_", " ").title() if pattern_label else None
     lines = [
-        f"🥇 {bot_name().upper()} — MOMENTUM {action_label}",
-        "📋 Tipe: Momentum Candle",
+        f"🥇 {bot_name().upper()} — {action_label}",
+        "📋 Momentum Candle",
         f"Waktu: {generated_at:%Y-%m-%d %H:%M} UTC",
         "━━━━━━━━━━━━━━━━━━━━",
-        "",
-        "📍 RENCANA HARGA",
     ]
     if reading.action in ("LONG", "SHORT"):
         lines.extend([
-            f"Entry referensi: {reading.entry:.2f}",
-            f"Stop loss: {reading.stop_loss:.2f}",
-            f"Take profit: {reading.take_profit:.2f}",
-            f"Risk/reward: 1:{reading.risk_reward:.1f}",
+            f"Entry: {reading.entry:.2f}",
+            f"SL: {reading.stop_loss:.2f} · TP: {reading.take_profit:.2f}",
+            f"RR: 1:{reading.risk_reward:.1f}",
         ])
-    lines.extend([
-        "",
-        "🔎 KONFIRMASI",
-        f"Skor momentum: {reading.score}/100",
-        f"RSI M5: {reading.rsi:.1f}",
-        f"Body candle: {reading.m5_body_ratio:.0%}",
-        f"Kondisi pasar: {regime_label}",
-    ])
+    confirm = [
+        f"Skor: {reading.score}/100",
+        f"RSI: {reading.rsi:.1f}",
+        f"Body: {reading.m5_body_ratio:.0%}",
+        f"Market: {regime_label}",
+    ]
     if pattern_label:
-        lines.append(f"Pola candle: {pattern_label}")
-    lines.extend([
-        f"EMA searah: {'ya' if reading.ema_aligned else 'tidak'}",
-        f"M15 konfirmasi: {'ya' if reading.m15_aligned else 'tidak'}",
-        f"Volume searah: {'ya' if reading.volume_aligned else 'tidak'}",
-        "",
-        "Skor momentum = kekuatan aksi harga, bukan peluang menang.",
+        confirm.append(f"Pola: {pattern_label}")
+    confirm.extend([
+        f"EMA: {'ya' if reading.ema_aligned else 'tidak'} · M15: {'ya' if reading.m15_aligned else 'tidak'} · Vol: {'ya' if reading.volume_aligned else 'tidak'}",
     ])
+    lines.append(" · ".join(confirm))
     if reading.reasons:
-        lines.extend(["", "✅ ALASAN SIGNAL", *[f"• {r}" for r in reading.reasons]])
+        lines.extend(["", "✅ " + " · ".join(reading.reasons)])
     if reading.cautions:
-        lines.extend(["", "⚠️ PERHATIAN", *[f"• {c}" for c in reading.cautions]])
+        lines.extend(["⚠️ " + " · ".join(reading.cautions)])
     lines.extend([
-        "",
-        "Bot mencatat hasil sampai TP, SL, atau kedaluwarsa. Tidak ada transaksi otomatis.",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "Skor momentum = kekuatan aksi harga, bukan peluang menang. Bot tidak auto-trading.",
     ])
     return "\n".join(lines)
 
