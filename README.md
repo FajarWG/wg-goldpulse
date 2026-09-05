@@ -169,6 +169,16 @@ python research_main.py --min-score 65
 
 Hasil riset ini adalah alat bantu, bukan dasar langsung untuk mengubah strategi. Filter baru harus lolos periode out-of-sample/holdout sebelum dipakai live.
 
+### Sweep reward:risk momentum
+
+`research_rr.py` memuat cache sekali lalu mencoba beberapa nilai reward:risk untuk strategi momentum, supaya nilai TP/SL dipilih dari data (bukan tebak):
+
+```bash
+python research_rr.py
+```
+
+Output membandingkan jumlah signal, win rate, total R, profit factor, dan drawdown untuk setiap reward:risk. Nilai momentum reward:risk bisa di-override lewat `--momentum-rr` atau `SIGNAL_MOMENTUM_REWARD_R`.
+
 ## Testing
 
 ```bash
@@ -191,6 +201,7 @@ signal_main.py            evaluasi M5/M15
 telegram_bot_main.py      Telegram listener dan commands
 backtest_main.py          historical replay
 research_main.py          analisis filter signal dari latest_trades.csv
+research_rr.py            sweep reward:risk strategi momentum
 usage_main.py             laporan pemakaian Twelve Data
 ```
 

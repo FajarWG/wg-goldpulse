@@ -34,6 +34,7 @@ def main() -> int:
     )
     parser.add_argument("--lookback-days", type=int, default=None)
     parser.add_argument("--output-label", default="")
+    parser.add_argument("--momentum-rr", type=float, default=None, help="override momentum reward:risk")
     parser.add_argument(
         "--fetch-only",
         action="store_true",
@@ -76,12 +77,14 @@ def main() -> int:
         all_trades[version] = trades
 
     # Momentum candle backtest
+    momentum_rr = args.momentum_rr if args.momentum_rr is not None else float(os.getenv("SIGNAL_MOMENTUM_REWARD_R", "2.0"))
     momentum_summary, momentum_trades = run_momentum_backtest(
         frames,
         timeout_minutes=int(os.getenv("SIGNAL_TIMEOUT_MINUTES", "240")),
         max_per_day=int(os.getenv("SIGNAL_MAX_MOMENTUM_PER_DAY", "5")),
         cooldown_minutes=int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30")),
         max_active=int(os.getenv("SIGNAL_MAX_ACTIVE_MOMENTUM", "3")),
+        reward_r=momentum_rr,
     )
     save_backtest(backtest_dir / "momentum_v1", momentum_summary, momentum_trades)
 

@@ -411,6 +411,7 @@ def run_momentum_backtest(
     max_per_day: int = 5,
     cooldown_minutes: int = 30,
     max_active: int = 3,
+    reward_r: float = 2.0,
 ) -> Tuple[BacktestSummary, List[BacktestTrade]]:
     """Backtest the momentum-candle-only strategy (no macro bias dependency)."""
     m5 = frames["M5"].copy().sort_index()
@@ -425,7 +426,6 @@ def run_momentum_backtest(
     evaluations = 0
     max_score = 0
     warmup_bars = 500
-    reward_r = 2.0
     regime_counts: Dict[str, int] = {}
 
     for index in range(500, len(m5) - 1):
