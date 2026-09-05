@@ -152,6 +152,23 @@ sudo systemctl start xauusd-backtest.service
 
 Parameter sinyal dibaca dari env: `SIGNAL_MAX_FULL_PER_DAY`, `SIGNAL_MAX_MOMENTUM_PER_DAY`, `SIGNAL_MAX_ACTIVE_MOMENTUM`, `SIGNAL_COOLDOWN_MINUTES`, `SIGNAL_TIMEOUT_MINUTES`.
 
+### Riset filter signal
+
+`research_main.py` membaca `latest_trades.csv` dan membandingkan win rate, total R, profit factor, dan drawdown per kelompok (skor, regime, alignment, arah). Pakai untuk mencari filter yang menyaring signal jelek:
+
+```bash
+# Momentum candle (path default)
+python research_main.py
+
+# Analisis Full
+python research_main.py /var/lib/xauusd-analysis/backtest/v6/latest_trades.csv
+
+# Hanya trade dengan skor >= 65
+python research_main.py --min-score 65
+```
+
+Hasil riset ini adalah alat bantu, bukan dasar langsung untuk mengubah strategi. Filter baru harus lolos periode out-of-sample/holdout sebelum dipakai live.
+
 ## Testing
 
 ```bash
@@ -173,6 +190,7 @@ main.py                   macro analysis H1/H4/D1
 signal_main.py            evaluasi M5/M15
 telegram_bot_main.py      Telegram listener dan commands
 backtest_main.py          historical replay
+research_main.py          analisis filter signal dari latest_trades.csv
 usage_main.py             laporan pemakaian Twelve Data
 ```
 

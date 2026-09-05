@@ -42,6 +42,9 @@ class BacktestTrade:
     hysteresis: str = "off"
     volume_confirm: Optional[bool] = None
     signal_type: str = "full"
+    ema_aligned: Optional[bool] = None
+    m15_aligned: Optional[bool] = None
+    volume_aligned: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -487,6 +490,9 @@ def run_momentum_backtest(
                 ambiguous=ambiguous,
                 regime=reading.regime,
                 signal_type="momentum",
+                ema_aligned=reading.ema_aligned,
+                m15_aligned=reading.m15_aligned,
+                volume_aligned=reading.volume_aligned,
             )
         )
         regime_counts[reading.regime] = regime_counts.get(reading.regime, 0) + 1
